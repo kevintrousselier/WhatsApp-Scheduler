@@ -19,7 +19,7 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
 
     if (message.attachments && message.attachments.length > 0) {
       for (const attachment of message.attachments) {
-        const filePath = path.join(__dirname, '..', 'uploads', String(message.user_id), attachment.filename);
+        const filePath = path.join(__dirname, '..', 'data', 'uploads', String(message.user_id), attachment.filename);
         await waClient.sendMedia(group.id, filePath, '');
         await sleep(2000);
       }
