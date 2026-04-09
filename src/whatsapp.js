@@ -22,7 +22,16 @@ class WhatsAppClient extends EventEmitter {
 
     const puppeteerOpts = {
       headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
+      protocolTimeout: 120000,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-software-rasterizer',
+        '--single-process',
+      ],
     };
     // Use system Chromium if set (Docker)
     if (process.env.PUPPETEER_EXECUTABLE_PATH) {
@@ -32,6 +41,7 @@ class WhatsAppClient extends EventEmitter {
     this.client = new Client({
       authStrategy: new LocalAuth({ clientId: `user-${this.userId}`, dataPath: sessionPath }),
       puppeteer: puppeteerOpts,
+      webVersionCache: { type: 'none' },
     });
 
     this.client.on('qr', (qr) => {
