@@ -22,7 +22,8 @@ class WhatsAppClient extends EventEmitter {
 
     const puppeteerOpts = {
       headless: true,
-      protocolTimeout: 120000,
+      protocolTimeout: 180000,
+      timeout: 120000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -30,7 +31,7 @@ class WhatsAppClient extends EventEmitter {
         '--disable-gpu',
         '--disable-extensions',
         '--disable-software-rasterizer',
-        '--single-process',
+        '--shm-size=512mb',
       ],
     };
     // Use system Chromium if set (Docker)
