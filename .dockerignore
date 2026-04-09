@@ -1,0 +1,9 @@
+node_modules
+data
+uploads
+.env
+.wwebjs_auth
+.wwebjs_cache
+.git
+*.md
+cahier-des-charges-whatsapp-scheduler.md

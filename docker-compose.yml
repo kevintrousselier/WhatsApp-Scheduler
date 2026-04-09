@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  whatsapp-scheduler:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - wa-data:/app/data
+      - wa-uploads:/app/uploads
+    environment:
+      - PORT=3000
+      - TIMEZONE=${TIMEZONE:-Europe/Paris}
+      - ANTI_SPAM_DELAY=${ANTI_SPAM_DELAY:-15}
+    restart: unless-stopped
+
+volumes:
+  wa-data:
+  wa-uploads:

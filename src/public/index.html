@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WhatsApp Scheduler</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <div class="header-left">
+        <h1 class="logo">WA Scheduler</h1>
+        <span class="subtitle">Femina Adventure</span>
+      </div>
+      <div class="header-right">
+        <span id="current-user" class="current-user hidden"></span>
+        <button id="btn-switch-profile" class="btn btn-sm hidden" onclick="switchProfile()">Changer de profil</button>
+        <span id="wa-status" class="status-badge disconnected">Deconnecte</span>
+      </div>
+    </header>
+
+    <div class="main-layout">
+      <!-- Sidebar -->
+      <nav class="sidebar" id="sidebar">
+        <a href="#" class="nav-item active" data-section="compose">
+          <span class="nav-icon">&#9997;</span>
+          <span>Nouveau</span>
+        </a>
+        <a href="#" class="nav-item" data-section="queue">
+          <span class="nav-icon">&#128203;</span>
+          <span>File d'attente</span>
+        </a>
+        <a href="#" class="nav-item" data-section="templates">
+          <span class="nav-icon">&#128218;</span>
+          <span>Templates</span>
+        </a>
+        <a href="#" class="nav-item" data-section="history">
+          <span class="nav-icon">&#128336;</span>
+          <span>Historique</span>
+        </a>
+      </nav>
+
+      <!-- Content -->
+      <main class="content">
+        <!-- QR Code Modal -->
+        <div id="qr-modal" class="modal hidden">
+          <div class="modal-content">
+            <h2>Connectez WhatsApp</h2>
+            <p>Scannez ce QR code avec votre telephone :</p>
+            <div id="qr-container"></div>
+            <p class="hint">WhatsApp > Appareils connectes > Connecter un appareil</p>
+          </div>
+        </div>
+
+        <!-- Section: Profile Selection -->
+        <section id="section-profiles" class="section">
+          <h2>Choisissez votre profil</h2>
+          <div id="profiles-grid" class="profiles-grid"></div>
+          <div class="add-profile">
+            <input type="text" id="new-profile-name" class="input" placeholder="Entrez votre prenom..." style="max-width:300px;display:inline-block">
+            <button class="btn btn-primary" onclick="createProfile()">Ajouter</button>
+          </div>
+        </section>
+
+        <!-- Section: Compose -->
+        <section id="section-compose" class="section hidden">
+          <h2>Nouveau message</h2>
+
+          <div id="connection-overlay" class="connection-overlay hidden"></div>
+
+          <div class="form-group">
+            <label>Destinataires (groupes)</label>
+            <div class="groups-select">
+              <input type="text" id="group-search" placeholder="Rechercher un groupe..." class="input">
+              <div id="groups-list" class="groups-list"></div>
+              <div id="selected-groups" class="selected-groups"></div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Destinataires (contacts individuels)</label>
+            <div class="groups-select">
+              <input type="text" id="contact-search" placeholder="Rechercher un contact..." class="input">
+              <div id="contacts-list" class="groups-list"></div>
+              <div id="selected-contacts" class="selected-groups"></div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Mode</label>
+            <div class="mode-toggle">
+              <button class="btn btn-sm active" id="mode-free" onclick="setMode('free')">Saisie libre</button>
+              <button class="btn btn-sm" id="mode-template" onclick="setMode('template')">Template</button>
+            </div>
+          </div>
+
+          <div id="template-picker" class="form-group hidden">
+            <label>Choisir un template</label>
+            <select id="template-select" class="input" onchange="loadTemplate()">
+              <option value="">-- Selectionner --</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label>Message</label>
+            <textarea id="message-content" class="textarea" rows="6"
+              placeholder="Votre message... (*gras*, _italique_, ~barre~)"></textarea>
+            <div class="message-preview-toggle">
+              <button class="btn btn-xs" onclick="togglePreview()">Apercu</button>
+            </div>
+            <div id="message-preview" class="message-preview hidden"></div>
+          </div>
+
+          <div class="form-group">
+            <label>Pieces jointes</label>
+            <div id="drop-zone" class="drop-zone">
+              <p>Glissez vos fichiers ici ou <label for="file-input" class="link">parcourir</label></p>
+              <input type="file" id="file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4">
+              <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
+            </div>
+            <div id="file-list" class="file-list"></div>
+          </div>
+
+          <div class="form-group">
+            <label>Envoi</label>
+            <div class="send-options">
+              <button class="btn btn-primary" onclick="sendNow()">Envoyer maintenant</button>
+              <span class="or">ou</span>
+              <div class="schedule-row">
+                <input type="datetime-local" id="schedule-datetime" class="input">
+                <button class="btn btn-secondary" onclick="scheduleMessage()">Programmer</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Section: Queue -->
+        <section id="section-queue" class="section hidden">
+          <h2>File d'attente</h2>
+          <div id="queue-list" class="queue-list">
+            <p class="empty">Aucun message programme.</p>
+          </div>
+        </section>
+
+        <!-- Section: Templates -->
+        <section id="section-templates" class="section hidden">
+          <div class="section-header">
+            <h2>Templates</h2>
+            <button class="btn btn-primary" onclick="showTemplateForm()">+ Nouveau template</button>
+          </div>
+
+          <div id="template-form" class="card hidden">
+            <h3 id="template-form-title">Nouveau template</h3>
+            <input type="hidden" id="template-edit-id">
+            <div class="form-group">
+              <label>Titre</label>
+              <input type="text" id="tpl-title" class="input" placeholder="Ex: Rappel J-7 Corse">
+            </div>
+            <div class="form-group">
+              <label>Contenu</label>
+              <textarea id="tpl-content" class="textarea" rows="5"
+                placeholder="Utilisez {{prenom}}, {{groupe}}, {{date_raid}}, {{destination}}"></textarea>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" onclick="saveTemplate()">Enregistrer</button>
+              <button class="btn" onclick="hideTemplateForm()">Annuler</button>
+            </div>
+          </div>
+
+          <div id="templates-grid" class="templates-grid"></div>
+        </section>
+
+        <!-- Section: History -->
+        <section id="section-history" class="section hidden">
+          <div class="section-header">
+            <h2>Historique des envois</h2>
+            <button class="btn btn-secondary" onclick="exportCSV()">Exporter CSV</button>
+          </div>
+
+          <div class="filters">
+            <input type="text" id="filter-group" class="input input-sm" placeholder="Filtrer par groupe">
+            <select id="filter-status" class="input input-sm">
+              <option value="">Tous les statuts</option>
+              <option value="sent">Envoyes</option>
+              <option value="error">Erreurs</option>
+            </select>
+            <input type="date" id="filter-from" class="input input-sm">
+            <input type="date" id="filter-to" class="input input-sm">
+            <button class="btn btn-sm" onclick="loadHistory()">Filtrer</button>
+          </div>
+
+          <table class="table" id="history-table">
+            <thead>
+              <tr>
+                <th>Date/Heure</th>
+                <th>Groupe</th>
+                <th>Message</th>
+                <th>Statut</th>
+                <th>Erreur</th>
+              </tr>
+            </thead>
+            <tbody id="history-body"></tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
