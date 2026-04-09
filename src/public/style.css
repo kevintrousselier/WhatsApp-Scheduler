@@ -638,8 +638,9 @@ body {
 
 /* Profiles */
 .profiles-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 16px;
   margin-bottom: 24px;
 }
