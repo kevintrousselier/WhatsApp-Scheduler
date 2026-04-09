@@ -286,11 +286,8 @@ async function start() {
   await db.init();
   console.log('[Server] Database ready');
 
-  // Initialize WhatsApp clients for all existing users
-  const users = db.getAllUsers();
-  if (users.length > 0) {
-    await waManager.initializeAll(users.map((u) => u.id));
-  }
+  // Don't initialize all WhatsApp clients at startup — too resource heavy.
+  // Clients are initialized on-demand when a user connects via /api/connect.
 
   scheduler.start();
 

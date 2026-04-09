@@ -20,6 +20,16 @@ class WhatsAppClient extends EventEmitter {
     const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(this.userId));
     if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
+    // Clean up Chromium lock files to prevent "profile in use" errors
+    try {
+      const singletonLock = path.join(sessionPath, 'session', 'SingletonLock');
+      const singletonSocket = path.join(sessionPath, 'session', 'SingletonSocket');
+      const singletonCookie = path.join(sessionPath, 'session', 'SingletonCookie');
+      [singletonLock, singletonSocket, singletonCookie].forEach((f) => {
+        if (fs.existsSync(f)) { fs.unlinkSync(f); console.log(`[WhatsApp:${this.userId}] Cleaned lock: ${path.basename(f)}`); }
+      });
+    } catch (err) { /* ignore cleanup errors */ }
+
     const puppeteerOpts = {
       headless: true,
       protocolTimeout: 180000,

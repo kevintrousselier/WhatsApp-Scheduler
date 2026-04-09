@@ -66,8 +66,18 @@ async function processDueMessages() {
   console.log(`[Scheduler] Processing ${dueMessages.length} due message(s)`);
 
   for (const message of dueMessages) {
-    const waClient = waManager.getClient(message.user_id);
-    if (!waClient || waClient.getStatus().status !== 'ready') {
+    // Try to get existing client, or initialize one on-demand
+    let waClient = waManager.getClient(message.user_id);
+    if (!waClient) {
+      console.log(`[Scheduler] Initializing client for user ${message.user_id} on-demand...`);
+      waClient = await waManager.getOrCreateClient(message.user_id);
+      // Wait up to 90s for client to be ready
+      for (let w = 0; w < 30; w++) {
+        if (waClient.getStatus().status === 'ready') break;
+        await sleep(3000);
+      }
+    }
+    if (waClient.getStatus().status !== 'ready') {
       console.log(`[Scheduler] Skipping message #${message.id} — user ${message.user_id} client not ready`);
       continue;
     }
