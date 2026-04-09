@@ -152,8 +152,9 @@ async function selectProfile(userId, silent = false) {
   // Connect SSE for this user
   initSSE();
 
-  // Trigger WhatsApp connection
+  // Trigger WhatsApp connection, then poll for QR
   api('/api/connect', { method: 'POST' }).catch(() => {});
+  pollForQR();
 
   // Load data
   loadGroups();
@@ -220,12 +221,37 @@ function initSSE() {
     updateStatusBadge('disconnected');
   };
 
-  document.getElementById('wa-status').addEventListener('click', async () => {
+  // Click on badge to show QR (use onclick to avoid duplicates)
+  document.getElementById('wa-status').onclick = async () => {
     if (!currentUserId) return;
     const res = await api('/api/status');
-    const status = await res.json();
-    if (status.qrCode) showQRCode(status.qrCode);
-  });
+    const st = await res.json();
+    if (st.qrCode) showQRCode(st.qrCode);
+  };
+}
+
+let qrPollTimer = null;
+function pollForQR() {
+  if (qrPollTimer) clearInterval(qrPollTimer);
+  let attempts = 0;
+  qrPollTimer = setInterval(async () => {
+    attempts++;
+    if (attempts > 20 || !currentUserId) { clearInterval(qrPollTimer); return; }
+    try {
+      const res = await api('/api/status');
+      const st = await res.json();
+      updateStatusBadge(st.status);
+      if (st.qrCode) {
+        showQRCode(st.qrCode);
+        clearInterval(qrPollTimer);
+      } else if (st.status === 'ready') {
+        hideQRCode();
+        loadGroups();
+        loadContacts();
+        clearInterval(qrPollTimer);
+      }
+    } catch (err) { /* ignore */ }
+  }, 3000);
 }
 
 function updateStatusBadge(status) {
@@ -238,7 +264,7 @@ function updateStatusBadge(status) {
   const overlay = document.getElementById('connection-overlay');
   if (overlay) {
     if (status === 'connecting') {
-      overlay.innerHTML = '<div class="loading"><div class="spinner"></div><span>Connexion a WhatsApp en cours... Cela peut prendre jusqu\'a 1 minute.</span></div>';
+      overlay.innerHTML = '<div class="loading"><div class="spinner"></div><span>Connexion a WhatsApp en cours... <a href="#" onclick="event.preventDefault();checkQR()" style="color:var(--primary)">Afficher le QR code</a></span></div>';
       overlay.classList.remove('hidden');
     } else if (status === 'ready') {
       overlay.classList.add('hidden');
@@ -258,6 +284,19 @@ function showQRCode(qrData) {
 
 function hideQRCode() {
   document.getElementById('qr-modal').classList.add('hidden');
+}
+
+async function checkQR() {
+  if (!currentUserId) return;
+  try {
+    const res = await api('/api/status');
+    const st = await res.json();
+    if (st.qrCode) {
+      showQRCode(st.qrCode);
+    } else {
+      toast('QR code pas encore disponible, patientez...', 'info');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 // --- Loading indicator ---
