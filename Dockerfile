@@ -33,9 +33,8 @@ RUN npm install --production
 
 COPY . .
 
-# Persistent data directories
+# Persistent data directories (volumes configured in Railway)
 RUN mkdir -p data uploads
-VOLUME ["/app/data", "/app/uploads"]
 
 EXPOSE 3000
 
