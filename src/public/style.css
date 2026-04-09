@@ -603,6 +603,26 @@ body {
   width: 90%;
 }
 
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 28px;
+  color: var(--text-light);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: var(--text);
+}
+
+.modal-content {
+  position: relative;
+}
+
 .modal-content h2 {
   margin-bottom: 12px;
 }

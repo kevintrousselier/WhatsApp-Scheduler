@@ -45,8 +45,9 @@
       <!-- Content -->
       <main class="content">
         <!-- QR Code Modal -->
-        <div id="qr-modal" class="modal hidden">
+        <div id="qr-modal" class="modal hidden" onclick="if(event.target===this)hideQRCode()">
           <div class="modal-content">
+            <button class="modal-close" onclick="hideQRCode()">&times;</button>
             <h2>Connectez WhatsApp</h2>
             <p>Scannez ce QR code avec votre telephone :</p>
             <div id="qr-container"></div>
