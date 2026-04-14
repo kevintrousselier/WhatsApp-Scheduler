@@ -49,6 +49,7 @@ function showProfilesScreen() {
   document.getElementById('btn-switch-profile').classList.add('hidden');
   document.getElementById('current-user').classList.add('hidden');
   document.getElementById('wa-status').classList.add('hidden');
+  document.getElementById('btn-reconnect').classList.add('hidden');
   loadProfiles();
 }
 
@@ -131,6 +132,7 @@ async function selectProfile(userId, silent = false) {
   document.getElementById('btn-switch-profile').classList.remove('hidden');
   document.getElementById('current-user').classList.remove('hidden');
   document.getElementById('wa-status').classList.remove('hidden');
+  document.getElementById('btn-reconnect').classList.remove('hidden');
 
   // Fetch user info
   try {
@@ -296,6 +298,15 @@ async function checkQR() {
     } else {
       toast('QR code pas encore disponible, patientez...', 'info');
     }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+async function reconnectWhatsApp() {
+  if (!currentUserId) return;
+  toast('Reconnexion en cours...', 'info');
+  try {
+    await api('/api/reconnect', { method: 'POST' });
+    pollForQR();
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 

@@ -225,6 +225,16 @@ class WhatsAppManager extends EventEmitter {
     }
   }
 
+  async restartClient(userId) {
+    const client = this.clients.get(userId);
+    if (client) {
+      await client.destroy();
+      this.clients.delete(userId);
+    }
+    // Re-create without deleting session data (allows auto-reconnect)
+    return this.getOrCreateClient(userId);
+  }
+
   // Initialize all existing users' clients on startup
   async initializeAll(userIds) {
     console.log(`[WhatsAppManager] Initializing ${userIds.length} client(s)...`);

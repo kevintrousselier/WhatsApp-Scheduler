@@ -151,6 +151,16 @@ app.post('/api/connect', requireUser, async (req, res) => {
   }
 });
 
+app.post('/api/reconnect', requireUser, async (req, res) => {
+  try {
+    // Restart client without deleting session (allows auto-reconnect)
+    await waManager.restartClient(req.userId);
+    res.json({ success: true, message: 'Reconnecting...' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Groups & Contacts
 app.get('/api/groups', requireUser, (req, res) => {
   const client = waManager.getClient(req.userId);
