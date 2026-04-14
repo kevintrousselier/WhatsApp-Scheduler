@@ -153,6 +153,19 @@ class WhatsAppClient extends EventEmitter {
     this.status = 'disconnected';
     this.client = null;
   }
+
+  // Delete all session data from disk
+  deleteSessionData() {
+    const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(this.userId));
+    try {
+      if (fs.existsSync(sessionPath)) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        console.log(`[WhatsApp:${this.userId}] Session data deleted`);
+      }
+    } catch (err) {
+      console.error(`[WhatsApp:${this.userId}] Failed to delete session data:`, err.message);
+    }
+  }
 }
 
 // --- Manager : pool de clients ---
@@ -200,7 +213,15 @@ class WhatsAppManager extends EventEmitter {
     const client = this.clients.get(userId);
     if (client) {
       await client.destroy();
+      client.deleteSessionData();
       this.clients.delete(userId);
+    } else {
+      // No active client but session data may exist on disk
+      const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(userId));
+      if (fs.existsSync(sessionPath)) {
+        fs.rmSync(sessionPath, { recursive: true, force: true });
+        console.log(`[WhatsAppManager] Cleaned session data for user ${userId}`);
+      }
     }
   }
 

@@ -119,7 +119,15 @@ app.post('/api/users', (req, res) => {
 
 app.delete('/api/users/:id', async (req, res) => {
   const id = parseInt(req.params.id);
+  // Destroy WhatsApp client + session data
   await waManager.destroyClient(id);
+  // Delete user uploads
+  const userUploadsDir = path.join(UPLOADS_DIR, String(id));
+  if (fs.existsSync(userUploadsDir)) {
+    fs.rmSync(userUploadsDir, { recursive: true, force: true });
+    console.log(`[Server] Deleted uploads for user ${id}`);
+  }
+  // Delete user from DB (cascades to messages, templates, send_log)
   const result = db.deleteUser(id);
   if (result.changes === 0) return res.status(404).json({ error: 'User not found' });
   res.json({ success: true });

@@ -4,16 +4,12 @@ services:
   whatsapp-scheduler:
     build: .
     ports:
-      - "${PORT:-3000}:3000"
+      - "3000:3000"
     volumes:
-      - wa-data:/app/data
-      - wa-uploads:/app/uploads
+      - ./data:/app/data
     environment:
       - PORT=3000
-      - TIMEZONE=${TIMEZONE:-Europe/Paris}
-      - ANTI_SPAM_DELAY=${ANTI_SPAM_DELAY:-15}
+      - TZ=Europe/Paris
+      - ANTI_SPAM_DELAY=15
     restart: unless-stopped
-
-volumes:
-  wa-data:
-  wa-uploads:
+    shm_size: '512mb'
