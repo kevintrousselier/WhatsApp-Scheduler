@@ -2,6 +2,10 @@ const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
+function localNow() {
+  return new Date().toLocaleString('sv-SE', { timeZone: process.env.TZ || 'Europe/Paris' }).replace(' ', 'T');
+}
+
 const DATA_DIR = path.join(__dirname, '..', 'data');
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -189,7 +193,7 @@ module.exports = {
   },
 
   updateMessageStatus(id, status, error_log = null) {
-    const sent_at = (status === 'sent' || status === 'error') ? new Date().toISOString() : null;
+    const sent_at = (status === 'sent' || status === 'error') ? localNow() : null;
     runQuery('UPDATE messages SET status = ?, sent_at = ?, error_log = ? WHERE id = ?', [status, sent_at, error_log, id]);
   },
 

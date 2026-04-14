@@ -11,6 +11,10 @@ const scheduler = require('./scheduler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+function localNow() {
+  return new Date().toLocaleString('sv-SE', { timeZone: process.env.TZ || 'Europe/Paris' }).replace(' ', 'T');
+}
+
 const UPLOADS_DIR = path.join(__dirname, '..', 'data', 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -167,7 +171,7 @@ app.post('/api/messages', requireUser, (req, res) => {
 
     const message = db.createMessage(req.userId, {
       groups, content: content || '', attachments: attachments || [],
-      scheduled_at: send_now ? new Date().toISOString() : scheduled_at,
+      scheduled_at: send_now ? localNow() : scheduled_at,
       status: 'pending',
     });
 
@@ -214,7 +218,7 @@ app.post('/api/messages/:id/send', requireUser, async (req, res) => {
     if (message.status !== 'pending') return res.status(400).json({ error: 'Message already processed' });
     db.updateMessage(message.id, req.userId, {
       groups: message.groups, content: message.content,
-      attachments: message.attachments, scheduled_at: new Date().toISOString(),
+      attachments: message.attachments, scheduled_at: localNow(),
     });
     scheduler.processDueMessages().catch(console.error);
     res.json({ success: true });

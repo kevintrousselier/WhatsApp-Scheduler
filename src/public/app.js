@@ -514,7 +514,7 @@ async function scheduleMessage() {
   if (!datetime) { toast('Selectionnez une date et heure', 'error'); return; }
   const payload = buildPayload();
   if (!payload) return;
-  payload.scheduled_at = new Date(datetime).toISOString();
+  payload.scheduled_at = datetime;
 
   const url = editingMessageId ? `/api/messages/${editingMessageId}` : '/api/messages';
   const method = editingMessageId ? 'PUT' : 'POST';

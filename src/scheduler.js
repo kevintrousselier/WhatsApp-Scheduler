@@ -7,6 +7,10 @@ const ANTI_SPAM_DELAY = parseInt(process.env.ANTI_SPAM_DELAY || '15', 10) * 1000
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 30000;
 
+function localNow() {
+  return new Date().toLocaleString('sv-SE', { timeZone: process.env.TZ || 'Europe/Paris' }).replace(' ', 'T');
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -58,7 +62,7 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
 }
 
 async function processDueMessages() {
-  const now = new Date().toISOString();
+  const now = localNow();
   const dueMessages = db.getAllDueMessages(now);
 
   if (dueMessages.length === 0) return;
