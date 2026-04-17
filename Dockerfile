@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxrandr2 \
     xdg-utils \
     tzdata \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Timezone Europe/Paris

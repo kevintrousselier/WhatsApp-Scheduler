@@ -120,6 +120,19 @@ async function refreshAllContactsAndGroups() {
   if (refreshed > 0) console.log(`[Scheduler] Refreshed groups/contacts for ${refreshed} client(s)`);
 }
 
+// Kill clients idle for more than IDLE_MAX_MS (default 2h)
+const IDLE_MAX_MS = parseInt(process.env.IDLE_MAX_MS || (2 * 60 * 60 * 1000), 10);
+
+async function killIdleClientsJob() {
+  if (!waManager.killIdleClients) return;
+  try {
+    const killed = await waManager.killIdleClients(IDLE_MAX_MS);
+    if (killed > 0) console.log(`[Scheduler] Killed ${killed} idle client(s)`);
+  } catch (err) {
+    console.error('[Scheduler] killIdleClients error:', err.message);
+  }
+}
+
 function start() {
   // Process scheduled messages every 30s
   cron.schedule('*/30 * * * * *', () => {
@@ -135,7 +148,10 @@ function start() {
     );
   });
 
-  console.log('[Scheduler] Started — checking messages every 30s, refreshing contacts every 12h');
+  // Kill idle WhatsApp clients every 15 min to save memory
+  cron.schedule('*/15 * * * *', killIdleClientsJob);
+
+  console.log('[Scheduler] Started — messages every 30s, refresh 12h, idle-kill every 15min');
 }
 
-module.exports = { start, processDueMessages, refreshAllContactsAndGroups };
+module.exports = { start, processDueMessages, refreshAllContactsAndGroups, killIdleClientsJob };

@@ -13,6 +13,15 @@ class WhatsAppClient extends EventEmitter {
     this.groups = [];
     this.contacts = [];
     this.destroyed = false;
+    this.lastActivityAt = Date.now();
+  }
+
+  touchActivity() {
+    this.lastActivityAt = Date.now();
+  }
+
+  isIdle(maxIdleMs) {
+    return (Date.now() - this.lastActivityAt) > maxIdleMs;
   }
 
   async initialize() {
@@ -98,6 +107,7 @@ class WhatsAppClient extends EventEmitter {
 
   async loadGroups() {
     try {
+      this.touchActivity();
       const chats = await this.client.getChats();
       this.groups = chats
         .filter((chat) => chat.isGroup)
@@ -114,6 +124,7 @@ class WhatsAppClient extends EventEmitter {
 
   async loadContacts() {
     try {
+      this.touchActivity();
       const contacts = await this.client.getContacts();
       this.contacts = contacts
         .filter((c) => c.isMyContact && !c.isGroup && !c.isMe && c.id._serialized.endsWith('@c.us'))
@@ -130,11 +141,13 @@ class WhatsAppClient extends EventEmitter {
 
   async sendMessage(recipientId, text) {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
+    this.touchActivity();
     return this.client.sendMessage(recipientId, text);
   }
 
   async sendMedia(recipientId, filePath, caption = '') {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
+    this.touchActivity();
     const absolutePath = path.resolve(filePath);
     if (!fs.existsSync(absolutePath)) throw new Error(`File not found: ${absolutePath}`);
     const media = MessageMedia.fromFilePath(absolutePath);
@@ -274,6 +287,19 @@ class WhatsAppManager extends EventEmitter {
 
   getAllClients() {
     return Array.from(this.clients.values());
+  }
+
+  async killIdleClients(maxIdleMs) {
+    let killed = 0;
+    for (const [userId, client] of this.clients) {
+      if (client.isIdle(maxIdleMs)) {
+        console.log(`[WhatsAppManager] Killing idle client for user ${userId} (inactive > ${Math.round(maxIdleMs / 60000)}min)`);
+        try { await client.destroy(); } catch (_) {}
+        this.clients.delete(userId);
+        killed++;
+      }
+    }
+    return killed;
   }
 }
 
