@@ -12,6 +12,7 @@ class WhatsAppClient extends EventEmitter {
     this.qrCode = null;
     this.groups = [];
     this.contacts = [];
+    this.destroyed = false;
   }
 
   async initialize() {
@@ -82,7 +83,10 @@ class WhatsAppClient extends EventEmitter {
       this.status = 'disconnected';
       console.log(`[WhatsApp:${this.userId}] Disconnected:`, reason);
       this.emit('disconnected', { userId: this.userId, reason });
+      // Don't auto-reconnect if we manually destroyed the client
+      if (this.destroyed) return;
       setTimeout(() => {
+        if (this.destroyed) return;
         console.log(`[WhatsApp:${this.userId}] Attempting reconnection...`);
         this.initialize().catch((err) =>
           console.error(`[WhatsApp:${this.userId}] Reconnection failed:`, err.message)
@@ -145,6 +149,7 @@ class WhatsAppClient extends EventEmitter {
   }
 
   async destroy() {
+    this.destroyed = true;
     try {
       if (this.client) await this.client.destroy();
     } catch (err) {
@@ -230,6 +235,8 @@ class WhatsAppManager extends EventEmitter {
     if (client) {
       await client.destroy();
       this.clients.delete(userId);
+      // Wait for Chromium to fully release the profile
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
     // Re-create without deleting session data (allows auto-reconnect)
     return this.getOrCreateClient(userId);

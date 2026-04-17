@@ -303,10 +303,14 @@ async function checkQR() {
 
 async function reconnectWhatsApp() {
   if (!currentUserId) return;
-  toast('Reconnexion en cours...', 'info');
+  if (!confirm('Relancer la connexion WhatsApp ?')) return;
+  toast('Reconnexion en cours... (5-10s)', 'info');
+  hideQRCode();
+  updateStatusBadge('connecting');
   try {
     await api('/api/reconnect', { method: 'POST' });
-    pollForQR();
+    // Wait for server to restart the client then poll
+    setTimeout(() => pollForQR(), 3000);
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
