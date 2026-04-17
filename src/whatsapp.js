@@ -271,6 +271,10 @@ class WhatsAppManager extends EventEmitter {
     }
     return statuses;
   }
+
+  getAllClients() {
+    return Array.from(this.clients.values());
+  }
 }
 
 module.exports = new WhatsAppManager();

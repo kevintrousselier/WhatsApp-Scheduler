@@ -104,13 +104,38 @@ async function processDueMessages() {
   }
 }
 
+async function refreshAllContactsAndGroups() {
+  const clients = waManager.getAllClients ? waManager.getAllClients() : [];
+  let refreshed = 0;
+  for (const client of clients) {
+    if (client.getStatus().status !== 'ready') continue;
+    try {
+      await client.loadGroups();
+      await client.loadContacts();
+      refreshed++;
+    } catch (err) {
+      console.error(`[Scheduler] Refresh failed for user ${client.userId}:`, err.message);
+    }
+  }
+  if (refreshed > 0) console.log(`[Scheduler] Refreshed groups/contacts for ${refreshed} client(s)`);
+}
+
 function start() {
+  // Process scheduled messages every 30s
   cron.schedule('*/30 * * * * *', () => {
     processDueMessages().catch((err) =>
       console.error('[Scheduler] Error processing messages:', err.message)
     );
   });
-  console.log('[Scheduler] Started — checking every 30s');
+
+  // Refresh groups and contacts every 12 hours (at 06:00 and 18:00)
+  cron.schedule('0 6,18 * * *', () => {
+    refreshAllContactsAndGroups().catch((err) =>
+      console.error('[Scheduler] Error refreshing contacts:', err.message)
+    );
+  });
+
+  console.log('[Scheduler] Started — checking messages every 30s, refreshing contacts every 12h');
 }
 
-module.exports = { start, processDueMessages };
+module.exports = { start, processDueMessages, refreshAllContactsAndGroups };

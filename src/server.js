@@ -172,6 +172,25 @@ app.get('/api/contacts', requireUser, (req, res) => {
   res.json(client ? client.getContacts() : []);
 });
 
+// Force refresh of groups and contacts from WhatsApp
+app.post('/api/refresh', requireUser, async (req, res) => {
+  const client = waManager.getClient(req.userId);
+  if (!client || client.getStatus().status !== 'ready') {
+    return res.status(400).json({ error: 'WhatsApp client not ready' });
+  }
+  try {
+    await client.loadGroups();
+    await client.loadContacts();
+    res.json({
+      success: true,
+      groups: client.getGroups().length,
+      contacts: client.getContacts().length,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Messages ---
 app.post('/api/messages', requireUser, (req, res) => {
   try {
