@@ -479,6 +479,67 @@ function formatWhatsApp(text) {
     .replace(/\n/g, '<br>');
 }
 
+// --- Emoji picker ---
+let activeEmojiPicker = null;
+
+function toggleEmojiPicker(targetId, btn) {
+  const existing = document.querySelector('.emoji-picker-container');
+  if (existing) {
+    existing.remove();
+    activeEmojiPicker = null;
+    return;
+  }
+
+  const textarea = document.getElementById(targetId);
+  if (!textarea) return;
+
+  const container = document.createElement('div');
+  container.className = 'emoji-picker-container';
+  const picker = document.createElement('emoji-picker');
+  // Try to match language
+  picker.setAttribute('locale', 'fr');
+  container.appendChild(picker);
+
+  // Position near the button
+  const wrapper = btn.closest('.textarea-wrapper') || textarea.parentElement;
+  wrapper.style.position = 'relative';
+  wrapper.appendChild(container);
+
+  // Position: below the button, right-aligned
+  container.style.right = '0';
+  container.style.top = '100%';
+
+  picker.addEventListener('emoji-click', (event) => {
+    const emoji = event.detail.unicode;
+    insertAtCursor(textarea, emoji);
+  });
+
+  activeEmojiPicker = container;
+
+  // Close on outside click
+  setTimeout(() => {
+    const closeOnOutside = (e) => {
+      if (!container.contains(e.target) && e.target !== btn) {
+        container.remove();
+        activeEmojiPicker = null;
+        document.removeEventListener('click', closeOnOutside);
+      }
+    };
+    document.addEventListener('click', closeOnOutside);
+  }, 0);
+}
+
+function insertAtCursor(textarea, text) {
+  const start = textarea.selectionStart ?? textarea.value.length;
+  const end = textarea.selectionEnd ?? textarea.value.length;
+  const before = textarea.value.substring(0, start);
+  const after = textarea.value.substring(end);
+  textarea.value = before + text + after;
+  const newPos = start + text.length;
+  textarea.selectionStart = textarea.selectionEnd = newPos;
+  textarea.focus();
+}
+
 // --- File upload ---
 function initDropZone() {
   const zone = document.getElementById('drop-zone');

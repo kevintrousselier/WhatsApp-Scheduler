@@ -16,6 +16,7 @@
   <meta name="mobile-web-app-capable" content="yes">
 
   <link rel="stylesheet" href="style.css">
+  <script type="module" src="https://cdn.jsdelivr.net/npm/emoji-picker-element@1/index.js"></script>
 </head>
 <body>
   <div class="app">
@@ -118,8 +119,11 @@
 
           <div class="form-group">
             <label>Message</label>
-            <textarea id="message-content" class="textarea" rows="6"
-              placeholder="Votre message... (*gras*, _italique_, ~barre~)"></textarea>
+            <div class="textarea-wrapper">
+              <textarea id="message-content" class="textarea" rows="6"
+                placeholder="Votre message... (*gras*, _italique_, ~barre~)"></textarea>
+              <button type="button" class="emoji-toggle" onclick="toggleEmojiPicker('message-content', this)" title="Emojis" aria-label="Ajouter un emoji">&#128578;</button>
+            </div>
             <div class="message-preview-toggle">
               <button class="btn btn-xs" onclick="togglePreview()">Apercu</button>
             </div>
@@ -173,8 +177,11 @@
             </div>
             <div class="form-group">
               <label>Contenu</label>
-              <textarea id="tpl-content" class="textarea" rows="5"
-                placeholder="Contenu du template..."></textarea>
+              <div class="textarea-wrapper">
+                <textarea id="tpl-content" class="textarea" rows="5"
+                  placeholder="Contenu du template..."></textarea>
+                <button type="button" class="emoji-toggle" onclick="toggleEmojiPicker('tpl-content', this)" title="Emojis" aria-label="Ajouter un emoji">&#128578;</button>
+              </div>
             </div>
             <div class="form-group">
               <label>Pieces jointes (optionnel)</label>
