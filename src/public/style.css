@@ -59,6 +59,39 @@ body {
   color: var(--primary);
 }
 
+.logo-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: block;
+}
+
+.btn-icon {
+  background: transparent;
+  color: white;
+  border: 1px solid rgba(255,255,255,0.2);
+  border-radius: 8px;
+  width: 32px;
+  height: 32px;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s;
+}
+
+.btn-icon:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .subtitle {
   font-size: 13px;
   color: var(--sidebar-text);
@@ -840,38 +873,52 @@ body {
 @media (max-width: 768px) {
   /* Header */
   .header {
-    padding: 0 12px;
-    height: 48px;
-    gap: 8px;
-  }
-
-  .logo {
-    font-size: 15px;
-  }
-
-  .header-right {
-    display: flex;
-    align-items: center;
+    padding: 0 10px;
+    height: 52px;
     gap: 6px;
   }
 
+  .logo {
+    display: none; /* hide text, keep icon only on mobile */
+  }
+
+  .logo-icon {
+    width: 32px;
+    height: 32px;
+  }
+
+  .header-left {
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .header-right {
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
   .current-user {
-    font-size: 11px;
-    margin-right: 4px;
-    max-width: 60px;
+    display: inline-block !important;
+    font-size: 14px;
+    color: white;
+    font-weight: 600;
+    margin: 0;
+    max-width: 140px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  #btn-switch-profile {
-    font-size: 10px;
-    padding: 4px 8px;
-  }
-
   .status-badge {
     font-size: 10px;
     padding: 3px 8px;
+  }
+
+  .btn-icon {
+    width: 34px;
+    height: 34px;
+    font-size: 18px;
   }
 
   /* Sidebar -> bottom nav bar */

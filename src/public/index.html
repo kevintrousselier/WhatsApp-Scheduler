@@ -2,8 +2,19 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>WhatsApp Scheduler</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>WA Scheduler</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.webmanifest">
+  <meta name="theme-color" content="#128C7E">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="apple-touch-icon" href="/icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="WA Scheduler">
+  <meta name="mobile-web-app-capable" content="yes">
+
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,13 +22,14 @@
     <!-- Header -->
     <header class="header">
       <div class="header-left">
+        <img src="/icon.svg" alt="" class="logo-icon">
         <h1 class="logo">WA Scheduler</h1>
+        <span id="current-user" class="current-user hidden"></span>
       </div>
       <div class="header-right">
-        <span id="current-user" class="current-user hidden"></span>
-        <button id="btn-switch-profile" class="btn btn-sm hidden" onclick="switchProfile()">Changer de profil</button>
-        <button id="btn-reconnect" class="btn btn-sm hidden" onclick="reconnectWhatsApp()">Reconnecter</button>
-        <span id="wa-status" class="status-badge disconnected">Deconnecte</span>
+        <span id="wa-status" class="status-badge disconnected" title="Statut WhatsApp">Deconnecte</span>
+        <button id="btn-reconnect" class="btn-icon hidden" onclick="reconnectWhatsApp()" title="Reconnecter WhatsApp" aria-label="Reconnecter">&#8635;</button>
+        <button id="btn-switch-profile" class="btn-icon hidden" onclick="switchProfile()" title="Changer de profil" aria-label="Changer de profil">&#128100;</button>
       </div>
     </header>
 
