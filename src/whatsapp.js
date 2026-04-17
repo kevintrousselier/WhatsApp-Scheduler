@@ -21,15 +21,8 @@ class WhatsAppClient extends EventEmitter {
     const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(this.userId));
     if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
-    // Clean up Chromium lock files to prevent "profile in use" errors
-    try {
-      const singletonLock = path.join(sessionPath, 'session', 'SingletonLock');
-      const singletonSocket = path.join(sessionPath, 'session', 'SingletonSocket');
-      const singletonCookie = path.join(sessionPath, 'session', 'SingletonCookie');
-      [singletonLock, singletonSocket, singletonCookie].forEach((f) => {
-        if (fs.existsSync(f)) { fs.unlinkSync(f); console.log(`[WhatsApp:${this.userId}] Cleaned lock: ${path.basename(f)}`); }
-      });
-    } catch (err) { /* ignore cleanup errors */ }
+    // Clean up Chromium lock files recursively to prevent "profile in use" errors
+    this._cleanLocks(sessionPath);
 
     const puppeteerOpts = {
       headless: true,
@@ -146,6 +139,27 @@ class WhatsAppClient extends EventEmitter {
     if (!fs.existsSync(absolutePath)) throw new Error(`File not found: ${absolutePath}`);
     const media = MessageMedia.fromFilePath(absolutePath);
     return this.client.sendMessage(recipientId, media, { caption });
+  }
+
+  _cleanLocks(dir) {
+    const LOCK_NAMES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', '.org.chromium.Chromium.*'];
+    try {
+      if (!fs.existsSync(dir)) return;
+      const walk = (d) => {
+        const entries = fs.readdirSync(d, { withFileTypes: true });
+        for (const e of entries) {
+          const full = path.join(d, e.name);
+          if (e.isDirectory()) {
+            walk(full);
+          } else if (e.isSymbolicLink() || LOCK_NAMES.some(n => n.includes('*') ? e.name.startsWith('.org.chromium') : e.name === n)) {
+            try { fs.unlinkSync(full); console.log(`[WhatsApp:${this.userId}] Removed lock ${e.name}`); } catch (_) {}
+          }
+        }
+      };
+      walk(dir);
+    } catch (err) {
+      console.error(`[WhatsApp:${this.userId}] cleanLocks error:`, err.message);
+    }
   }
 
   async destroy() {
