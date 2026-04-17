@@ -55,11 +55,23 @@ async function init() {
       title TEXT NOT NULL,
       content TEXT NOT NULL,
       variables_json TEXT DEFAULT '[]',
+      attachments_json TEXT DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  // Migration: add attachments_json column to existing templates table
+  try {
+    const cols = getAll("PRAGMA table_info('templates')");
+    if (!cols.some(c => c.name === 'attachments_json')) {
+      db.run("ALTER TABLE templates ADD COLUMN attachments_json TEXT DEFAULT '[]'");
+      console.log('[Database] Migrated templates: added attachments_json column');
+    }
+  } catch (err) {
+    console.error('[Database] Migration error:', err.message);
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS send_log (
@@ -124,7 +136,11 @@ function parseMessage(row) {
 
 function parseTemplate(row) {
   if (!row) return null;
-  return { ...row, variables: JSON.parse(row.variables_json || '[]') };
+  return {
+    ...row,
+    variables: JSON.parse(row.variables_json || '[]'),
+    attachments: JSON.parse(row.attachments_json || '[]'),
+  };
 }
 
 function parseHistoryRow(row) {
@@ -204,10 +220,10 @@ module.exports = {
   },
 
   // --- Templates ---
-  createTemplate(userId, { title, content, variables = [] }) {
+  createTemplate(userId, { title, content, variables = [], attachments = [] }) {
     const id = runInsert(
-      'INSERT INTO templates (user_id, title, content, variables_json) VALUES (?, ?, ?, ?)',
-      [userId, title, content, JSON.stringify(variables)]
+      'INSERT INTO templates (user_id, title, content, variables_json, attachments_json) VALUES (?, ?, ?, ?, ?)',
+      [userId, title, content, JSON.stringify(variables), JSON.stringify(attachments)]
     );
     return this.getTemplateById(id);
   },
@@ -220,10 +236,10 @@ module.exports = {
     return parseTemplate(getOne('SELECT * FROM templates WHERE id = ?', [id]));
   },
 
-  updateTemplate(id, userId, { title, content, variables = [] }) {
+  updateTemplate(id, userId, { title, content, variables = [], attachments = [] }) {
     runQuery(
-      "UPDATE templates SET title = ?, content = ?, variables_json = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
-      [title, content, JSON.stringify(variables), id, userId]
+      "UPDATE templates SET title = ?, content = ?, variables_json = ?, attachments_json = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
+      [title, content, JSON.stringify(variables), JSON.stringify(attachments), id, userId]
     );
     return this.getTemplateById(id);
   },

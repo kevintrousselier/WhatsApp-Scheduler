@@ -263,9 +263,9 @@ app.get('/api/templates', requireUser, (req, res) => {
 
 app.post('/api/templates', requireUser, (req, res) => {
   try {
-    const { title, content, variables } = req.body;
+    const { title, content, variables, attachments } = req.body;
     if (!title || !content) return res.status(400).json({ error: 'Title and content required' });
-    const template = db.createTemplate(req.userId, { title, content, variables });
+    const template = db.createTemplate(req.userId, { title, content, variables, attachments });
     res.status(201).json(template);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -274,8 +274,8 @@ app.post('/api/templates', requireUser, (req, res) => {
 
 app.put('/api/templates/:id', requireUser, (req, res) => {
   try {
-    const { title, content, variables } = req.body;
-    const template = db.updateTemplate(parseInt(req.params.id), req.userId, { title, content, variables });
+    const { title, content, variables, attachments } = req.body;
+    const template = db.updateTemplate(parseInt(req.params.id), req.userId, { title, content, variables, attachments });
     if (!template) return res.status(404).json({ error: 'Template not found' });
     res.json(template);
   } catch (err) {

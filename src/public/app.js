@@ -9,6 +9,7 @@ let templates = [];
 let currentMode = 'free';
 let editingMessageId = null;
 let evtSource = null;
+let tplAttachments = [];
 
 // --- Init ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -443,7 +444,18 @@ async function loadTemplate() {
     const res = await api('/api/templates');
     const tpls = await res.json();
     const tpl = tpls.find((t) => t.id === parseInt(select.value));
-    if (tpl) document.getElementById('message-content').value = tpl.content;
+    if (tpl) {
+      document.getElementById('message-content').value = tpl.content;
+      if (Array.isArray(tpl.attachments) && tpl.attachments.length > 0) {
+        // Merge template attachments into compose uploads (avoid duplicates)
+        const existingNames = new Set(uploadedFiles.map((f) => f.filename));
+        for (const att of tpl.attachments) {
+          if (!existingNames.has(att.filename)) uploadedFiles.push(att);
+        }
+        renderFileList();
+        toast(`${tpl.attachments.length} piece(s) jointe(s) chargee(s) depuis le template`, 'info');
+      }
+    }
   } catch (err) { console.error('Failed to load template:', err); }
 }
 
@@ -643,16 +655,20 @@ function renderTemplates() {
     grid.innerHTML = '<p style="color:var(--text-light);font-style:italic">Aucun template. Creez-en un !</p>';
     return;
   }
-  grid.innerHTML = templates.map((t) => `
+  grid.innerHTML = templates.map((t) => {
+    const attCount = Array.isArray(t.attachments) ? t.attachments.length : 0;
+    return `
     <div class="template-card">
       <h3>${escapeHtml(t.title)}</h3>
       <div class="preview">${escapeHtml(t.content).substring(0, 120)}</div>
+      ${attCount > 0 ? `<div style="font-size:12px;color:var(--text-light);margin-bottom:8px">&#128206; ${attCount} piece(s) jointe(s)</div>` : ''}
       <div class="actions">
         <button class="btn btn-sm" onclick="editTemplate(${t.id})">Modifier</button>
         <button class="btn btn-sm" onclick="duplicateTemplate(${t.id})">Dupliquer</button>
         <button class="btn btn-sm btn-danger" onclick="deleteTemplate(${t.id})">Supprimer</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function showTemplateForm() {
@@ -661,20 +677,68 @@ function showTemplateForm() {
   document.getElementById('template-edit-id').value = '';
   document.getElementById('tpl-title').value = '';
   document.getElementById('tpl-content').value = '';
+  tplAttachments = [];
+  renderTplFileList();
+  initTplDropZone();
 }
 
-function hideTemplateForm() { document.getElementById('template-form').classList.add('hidden'); }
+function hideTemplateForm() {
+  document.getElementById('template-form').classList.add('hidden');
+  tplAttachments = [];
+}
+
+function renderTplFileList() {
+  const container = document.getElementById('tpl-file-list');
+  if (!container) return;
+  container.innerHTML = tplAttachments
+    .map((f, i) => `<div class="file-item">
+      <div><span class="file-name">${escapeHtml(f.originalname)}</span>
+      ${f.size ? `<span class="file-size">${formatSize(f.size)}</span>` : ''}</div>
+      <button class="btn btn-xs btn-danger" onclick="removeTplFile(${i})">Supprimer</button>
+    </div>`).join('');
+}
+
+function removeTplFile(index) {
+  tplAttachments.splice(index, 1);
+  renderTplFileList();
+}
+
+async function handleTplFiles(fileList) {
+  const formData = new FormData();
+  for (const file of fileList) {
+    if (file.size > 16 * 1024 * 1024) { toast(`"${file.name}" depasse 16 Mo`, 'error'); continue; }
+    formData.append('files', file);
+  }
+  try {
+    const res = await api('/api/upload', { method: 'POST', body: formData });
+    const files = await res.json();
+    if (res.ok) { tplAttachments.push(...files); renderTplFileList(); }
+    else toast(files.error || 'Erreur upload', 'error');
+  } catch (err) { toast('Erreur upload: ' + err.message, 'error'); }
+}
+
+function initTplDropZone() {
+  const zone = document.getElementById('tpl-drop-zone');
+  const input = document.getElementById('tpl-file-input');
+  if (!zone || !input) return;
+  if (zone.dataset.initialized) return;
+  zone.dataset.initialized = '1';
+  zone.addEventListener('dragover', (e) => { e.preventDefault(); zone.classList.add('dragover'); });
+  zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+  zone.addEventListener('drop', (e) => { e.preventDefault(); zone.classList.remove('dragover'); handleTplFiles(e.dataTransfer.files); });
+  input.addEventListener('change', () => { handleTplFiles(input.files); input.value = ''; });
+}
 
 async function saveTemplate() {
   const editId = document.getElementById('template-edit-id').value;
   const title = document.getElementById('tpl-title').value.trim();
   const content = document.getElementById('tpl-content').value.trim();
   if (!title || !content) { toast('Titre et contenu requis', 'error'); return; }
-  const variables = [...new Set((content.match(/\{\{(\w+)\}\}/g) || []).map((v) => v.replace(/[{}]/g, '')))];
+  const attachments = tplAttachments.map((f) => ({ filename: f.filename, originalname: f.originalname }));
   const url = editId ? `/api/templates/${editId}` : '/api/templates';
   const method = editId ? 'PUT' : 'POST';
   try {
-    const res = await api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, content, variables }) });
+    const res = await api(url, { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title, content, variables: [], attachments }) });
     if (res.ok) { toast(editId ? 'Template modifie !' : 'Template cree !', 'success'); hideTemplateForm(); loadTemplatesList(); }
     else { const data = await res.json(); toast(data.error || 'Erreur', 'error'); }
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
@@ -688,6 +752,9 @@ async function editTemplate(id) {
   document.getElementById('template-edit-id').value = id;
   document.getElementById('tpl-title').value = tpl.title;
   document.getElementById('tpl-content').value = tpl.content;
+  tplAttachments = Array.isArray(tpl.attachments) ? [...tpl.attachments] : [];
+  renderTplFileList();
+  initTplDropZone();
 }
 
 async function duplicateTemplate(id) {
@@ -696,7 +763,12 @@ async function duplicateTemplate(id) {
   try {
     const res = await api('/api/templates', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: tpl.title + ' (copie)', content: tpl.content, variables: tpl.variables }),
+      body: JSON.stringify({
+        title: tpl.title + ' (copie)',
+        content: tpl.content,
+        variables: [],
+        attachments: tpl.attachments || [],
+      }),
     });
     if (res.ok) { toast('Template duplique !', 'success'); loadTemplatesList(); }
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }

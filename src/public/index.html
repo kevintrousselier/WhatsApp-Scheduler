@@ -164,6 +164,15 @@
               <textarea id="tpl-content" class="textarea" rows="5"
                 placeholder="Contenu du template..."></textarea>
             </div>
+            <div class="form-group">
+              <label>Pieces jointes (optionnel)</label>
+              <div id="tpl-drop-zone" class="drop-zone">
+                <p>Glissez vos fichiers ici ou <label for="tpl-file-input" class="link">parcourir</label></p>
+                <input type="file" id="tpl-file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4">
+                <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
+              </div>
+              <div id="tpl-file-list" class="file-list"></div>
+            </div>
             <div class="form-actions">
               <button class="btn btn-primary" onclick="saveTemplate()">Enregistrer</button>
               <button class="btn" onclick="hideTemplateForm()">Annuler</button>
