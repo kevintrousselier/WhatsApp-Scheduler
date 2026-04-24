@@ -177,6 +177,11 @@
           </div>
 
           <div class="form-group">
+            <label>Fuseau horaire</label>
+            <select id="message-timezone" class="input" style="max-width:320px"></select>
+          </div>
+
+          <div class="form-group">
             <label>Envoi</label>
             <div class="send-options">
               <button class="btn btn-primary" onclick="sendNow()">Envoyer maintenant</button>
@@ -320,6 +325,7 @@
             <thead>
               <tr>
                 <th>Date/Heure</th>
+                <th>Fuseau</th>
                 <th>Groupe</th>
                 <th>Message</th>
                 <th>Statut</th>
@@ -334,6 +340,17 @@
         <!-- Section: Settings -->
         <section id="section-settings" class="section hidden">
           <h2>Parametres</h2>
+
+          <div class="card">
+            <h3>Fuseau horaire par defaut</h3>
+            <p style="font-size:13px;color:var(--text-light);margin-bottom:14px">
+              Ce fuseau sera applique par defaut aux nouveaux messages. Vous pourrez le modifier par message.
+            </p>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="settings-timezone" class="input" style="max-width:320px"></select>
+              <button class="btn btn-primary" onclick="saveUserTimezone()">Enregistrer</button>
+            </div>
+          </div>
 
           <div class="card">
             <h3>Gestion des tags</h3>

@@ -7,8 +7,9 @@ const ANTI_SPAM_DELAY = parseInt(process.env.ANTI_SPAM_DELAY || '15', 10) * 1000
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 30000;
 
-function localNow() {
-  return new Date().toLocaleString('sv-SE', { timeZone: process.env.TZ || 'Europe/Paris' }).replace(' ', 'T');
+function localNow(tz) {
+  const zone = tz || process.env.TZ || 'Europe/Paris';
+  return new Date().toLocaleString('sv-SE', { timeZone: zone }).replace(' ', 'T');
 }
 
 function sleep(ms) {
@@ -45,6 +46,7 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
       group_id: group.id,
       group_name: group.name,
       status: 'sent',
+      timezone: message.timezone,
     });
 
     console.log(`[Scheduler] Sent message #${message.id} to "${group.name}" (user ${message.user_id})`);
@@ -65,6 +67,7 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
       group_name: group.name,
       status: 'error',
       error: err.message,
+      timezone: message.timezone,
     });
 
     return false;
@@ -72,8 +75,14 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
 }
 
 async function processDueMessages() {
-  const now = localNow();
-  const dueMessages = db.getAllDueMessages(now);
+  // Get all pending messages, filter by each message's own timezone.
+  // scheduled_at is stored as local time string for its timezone.
+  const allPending = db.getAllPendingMessages();
+  const dueMessages = allPending.filter((m) => {
+    if (!m.scheduled_at) return false;
+    const tz = m.timezone || 'Europe/Paris';
+    return m.scheduled_at <= localNow(tz);
+  });
 
   if (dueMessages.length === 0) return;
 

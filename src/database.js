@@ -28,9 +28,20 @@ async function init() {
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL UNIQUE,
+      timezone TEXT DEFAULT 'Europe/Paris',
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     )
   `);
+
+  try {
+    const cols = getAll("PRAGMA table_info('users')");
+    if (!cols.some(c => c.name === 'timezone')) {
+      db.run("ALTER TABLE users ADD COLUMN timezone TEXT DEFAULT 'Europe/Paris'");
+      console.log('[Database] Migrated users: added timezone column');
+    }
+  } catch (err) {
+    console.error('[Database] users TZ migration error:', err.message);
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -45,12 +56,13 @@ async function init() {
       error_log TEXT,
       notes TEXT DEFAULT '',
       tags_json TEXT DEFAULT '[]',
+      timezone TEXT DEFAULT 'Europe/Paris',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
-  // Migration: add notes + tags_json columns to existing messages table
+  // Migration: add notes + tags_json + timezone columns to existing messages table
   try {
     const cols = getAll("PRAGMA table_info('messages')");
     if (!cols.some(c => c.name === 'notes')) {
@@ -60,6 +72,10 @@ async function init() {
     if (!cols.some(c => c.name === 'tags_json')) {
       db.run("ALTER TABLE messages ADD COLUMN tags_json TEXT DEFAULT '[]'");
       console.log('[Database] Migrated messages: added tags_json column');
+    }
+    if (!cols.some(c => c.name === 'timezone')) {
+      db.run("ALTER TABLE messages ADD COLUMN timezone TEXT DEFAULT 'Europe/Paris'");
+      console.log('[Database] Migrated messages: added timezone column');
     }
   } catch (err) {
     console.error('[Database] Messages migration error:', err.message);
@@ -177,6 +193,7 @@ function parseMessage(row) {
     tags: JSON.parse(row.tags_json || '[]'),
     mentions: JSON.parse(row.mentions_json || '[]'),
     notes: row.notes || '',
+    timezone: row.timezone || 'Europe/Paris',
   };
 }
 
@@ -197,6 +214,7 @@ function parseHistoryRow(row) {
     tags: JSON.parse(row.tags_json || '[]'),
     mentions: JSON.parse(row.mentions_json || '[]'),
     notes: row.notes || '',
+    timezone: row.timezone || 'Europe/Paris',
   };
 }
 
@@ -213,6 +231,11 @@ module.exports = {
     return getAll('SELECT * FROM users ORDER BY name ASC');
   },
 
+  setUserTimezone(id, timezone) {
+    runQuery('UPDATE users SET timezone = ? WHERE id = ?', [timezone, id]);
+    return this.getUserById(id);
+  },
+
   getUserById(id) {
     return getOne('SELECT * FROM users WHERE id = ?', [id]);
   },
@@ -224,11 +247,11 @@ module.exports = {
   },
 
   // --- Messages ---
-  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [], mentions = [] }) {
+  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [], mentions = [], timezone = 'Europe/Paris' }) {
     const id = runInsert(
-      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json, mentions_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || [])]
+      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json, mentions_json, timezone)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), timezone || 'Europe/Paris']
     );
     return this.getMessageById(id);
   },
@@ -282,17 +305,29 @@ module.exports = {
     ).map(parseMessage);
   },
 
-  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [], mentions = [] }) {
+  getAllPendingMessages() {
+    return getAll("SELECT * FROM messages WHERE status = 'pending'").map(parseMessage);
+  },
+
+  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [], mentions = [], timezone }) {
+    const existing = this.getMessageById(id);
+    const tz = timezone || (existing && existing.timezone) || 'Europe/Paris';
     runQuery(
-      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?, mentions_json = ?
+      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?, mentions_json = ?, timezone = ?
        WHERE id = ? AND user_id = ? AND status = 'pending'`,
-      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), id, userId]
+      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), tz, id, userId]
     );
     return this.getMessageById(id);
   },
 
   updateMessageStatus(id, status, error_log = null) {
-    const sent_at = (status === 'sent' || status === 'error') ? localNow() : null;
+    let sent_at = null;
+    if (status === 'sent' || status === 'error') {
+      // Use the message's own timezone so sent_at is comparable to scheduled_at
+      const existing = this.getMessageById(id);
+      const tz = (existing && existing.timezone) || process.env.TZ || 'Europe/Paris';
+      sent_at = new Date().toLocaleString('sv-SE', { timeZone: tz }).replace(' ', 'T');
+    }
     runQuery('UPDATE messages SET status = ?, sent_at = ?, error_log = ? WHERE id = ?', [status, sent_at, error_log, id]);
   },
 
@@ -407,15 +442,16 @@ module.exports = {
   },
 
   // --- Send log ---
-  logSend({ user_id, message_id, group_id, group_name, status, error = null }) {
+  logSend({ user_id, message_id, group_id, group_name, status, error = null, timezone = 'Europe/Paris' }) {
+    const sent_at = new Date().toLocaleString('sv-SE', { timeZone: timezone }).replace(' ', 'T');
     runQuery(
-      'INSERT INTO send_log (user_id, message_id, group_id, group_name, status, error) VALUES (?, ?, ?, ?, ?, ?)',
-      [user_id, message_id, group_id, group_name, status, error]
+      'INSERT INTO send_log (user_id, message_id, group_id, group_name, status, sent_at, error) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [user_id, message_id, group_id, group_name, status, sent_at, error]
     );
   },
 
   getHistory(userId, filters = {}) {
-    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json, m.mentions_json FROM send_log sl
+    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json, m.mentions_json, m.timezone FROM send_log sl
                JOIN messages m ON sl.message_id = m.id WHERE sl.user_id = ?`;
     const params = [userId];
 

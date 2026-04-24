@@ -16,6 +16,34 @@ let participantsCache = {};
 let filterState = { queue: {}, history: {} };
 let currentDraftId = null;
 let autoSaveTimer = null;
+let userTimezone = 'Europe/Paris';
+
+const TIMEZONES = [
+  { value: 'Europe/Paris', label: 'Europe/Paris (UTC+1/+2)' },
+  { value: 'Europe/London', label: 'Europe/London (UTC+0/+1)' },
+  { value: 'Europe/Madrid', label: 'Europe/Madrid' },
+  { value: 'Europe/Berlin', label: 'Europe/Berlin' },
+  { value: 'Europe/Lisbon', label: 'Europe/Lisbon' },
+  { value: 'Europe/Moscow', label: 'Europe/Moscow' },
+  { value: 'Africa/Casablanca', label: 'Afrique/Casablanca' },
+  { value: 'Africa/Tunis', label: 'Afrique/Tunis' },
+  { value: 'Africa/Algiers', label: 'Afrique/Alger' },
+  { value: 'Africa/Abidjan', label: 'Afrique/Abidjan' },
+  { value: 'Africa/Johannesburg', label: 'Afrique/Johannesburg' },
+  { value: 'Indian/Mauritius', label: 'Ocean Indien/Maurice' },
+  { value: 'Indian/Reunion', label: 'Ocean Indien/Reunion' },
+  { value: 'Atlantic/Canary', label: 'Canaries' },
+  { value: 'America/Guadeloupe', label: 'Amerique/Guadeloupe' },
+  { value: 'America/Martinique', label: 'Amerique/Martinique' },
+  { value: 'America/New_York', label: 'Amerique/New York' },
+  { value: 'America/Los_Angeles', label: 'Amerique/Los Angeles' },
+  { value: 'America/Sao_Paulo', label: 'Amerique/Sao Paulo' },
+  { value: 'Asia/Tokyo', label: 'Asie/Tokyo' },
+  { value: 'Asia/Dubai', label: 'Asie/Dubai' },
+  { value: 'Asia/Bangkok', label: 'Asie/Bangkok' },
+  { value: 'Australia/Sydney', label: 'Australie/Sydney' },
+  { value: 'UTC', label: 'UTC' },
+];
 
 // --- Init ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -176,6 +204,7 @@ async function selectProfile(userId, silent = false) {
   loadContacts();
   loadTemplatesList();
   loadAvailableTags();
+  loadUserTimezone();
   startAutoSave();
 
   if (!silent) toast('Profil selectionne', 'info');
@@ -769,6 +798,49 @@ function renderTagsListSettings() {
   `).join('');
 }
 
+async function loadUserTimezone() {
+  try {
+    const res = await api('/api/users/me');
+    const u = await res.json();
+    userTimezone = u.timezone || 'Europe/Paris';
+    renderSettingsTimezone();
+    renderComposeTimezone();
+  } catch (_) {}
+}
+
+function renderSettingsTimezone() {
+  const sel = document.getElementById('settings-timezone');
+  if (!sel) return;
+  sel.innerHTML = TIMEZONES.map(t => `<option value="${t.value}"${t.value === userTimezone ? ' selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
+}
+
+async function saveUserTimezone() {
+  const sel = document.getElementById('settings-timezone');
+  const tz = sel.value;
+  try {
+    const res = await api(`/api/users/${currentUserId}/timezone`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ timezone: tz }),
+    });
+    if (res.ok) {
+      userTimezone = tz;
+      toast('Fuseau horaire mis a jour', 'success');
+      // Update message form if visible
+      const msgSel = document.getElementById('message-timezone');
+      if (msgSel) msgSel.value = tz;
+    } else {
+      const d = await res.json();
+      toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+function renderComposeTimezone() {
+  const sel = document.getElementById('message-timezone');
+  if (!sel) return;
+  sel.innerHTML = TIMEZONES.map(t => `<option value="${t.value}"${t.value === userTimezone ? ' selected' : ''}>${escapeHtml(t.label)}</option>`).join('');
+}
+
 async function createTag() {
   const input = document.getElementById('new-tag-name');
   const name = (input.value || '').trim();
@@ -802,6 +874,7 @@ function showSettings() {
   document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
   document.getElementById('section-settings').classList.remove('hidden');
   loadAvailableTags();
+  loadUserTimezone();
 }
 
 // ==============================
@@ -1172,12 +1245,14 @@ function buildPayload() {
   const content = text.trim();
   if (!content && uploadedFiles.length === 0) { toast('Redigez un message ou ajoutez un fichier', 'error'); return null; }
   const notes = (document.getElementById('message-notes')?.value || '').trim();
+  const timezone = document.getElementById('message-timezone')?.value || userTimezone || 'Europe/Paris';
   return {
     groups: allRecipients, content,
     attachments: uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname })),
     notes,
     tags: [...selectedTags],
     mentions,
+    timezone,
   };
 }
 
@@ -1193,6 +1268,8 @@ function resetForm() {
   if (notesEl) notesEl.value = '';
   selectedTags = [];
   renderTagsSelector();
+  const tzSel = document.getElementById('message-timezone');
+  if (tzSel) tzSel.value = userTimezone || 'Europe/Paris';
   renderGroups(); renderContacts(); renderFileList();
   editingMessageId = null;
   currentDraftId = null;
@@ -1263,7 +1340,7 @@ function renderQueueFiltered() {
     return `
     <div class="queue-item">
       <div class="queue-item-header">
-        <span class="date">${formatDate(m.scheduled_at)}</span>
+        <span class="date">${formatDate(m.scheduled_at, m.timezone)}</span>
         <span style="font-size:12px;color:var(--text-light)">#${m.id}</span>
       </div>
       <div class="queue-item-groups">
@@ -1296,6 +1373,8 @@ function fillComposeFromMessage(msg, { keepId = false, keepDate = true } = {}) {
   if (notesEl) notesEl.value = msg.notes || '';
   selectedTags = Array.isArray(msg.tags) ? [...msg.tags] : [];
   renderTagsSelector();
+  const tzSel = document.getElementById('message-timezone');
+  if (tzSel) tzSel.value = msg.timezone || userTimezone || 'Europe/Paris';
   editingMessageId = keepId ? msg.id : null;
   renderGroups(); renderContacts(); renderFileList();
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
@@ -1337,7 +1416,7 @@ function duplicateHistoryMessage(idx) {
 }
 
 // --- Preview modal ---
-function openPreviewModal({ scheduledAt, sentAt, status, recipients, content, attachments, notes, tags }) {
+function openPreviewModal({ scheduledAt, sentAt, status, recipients, content, attachments, notes, tags, timezone }) {
   const modal = document.getElementById('preview-modal');
   const meta = document.getElementById('preview-modal-meta');
   const body = document.getElementById('preview-modal-body');
@@ -1345,11 +1424,12 @@ function openPreviewModal({ scheduledAt, sentAt, status, recipients, content, at
   const notesEl = document.getElementById('preview-modal-notes');
 
   const parts = [];
-  if (scheduledAt) parts.push(`<strong>Programme :</strong> ${formatDate(scheduledAt)}`);
-  if (sentAt) parts.push(`<strong>Envoye :</strong> ${formatDate(sentAt)}`);
+  if (scheduledAt) parts.push(`<strong>Programme :</strong> ${formatDate(scheduledAt, timezone)}`);
+  if (sentAt) parts.push(`<strong>Envoye :</strong> ${formatDate(sentAt, timezone)}`);
   if (status) parts.push(`<strong>Statut :</strong> <span class="status-${status}">${status === 'sent' ? 'Envoye' : status === 'error' ? 'Erreur' : status}</span>`);
+  if (timezone) parts.push(`<strong>Fuseau :</strong> ${escapeHtml(timezone)}`);
   if (recipients && recipients.length) parts.push(`<strong>Destinataire(s) :</strong> ${recipients.map(escapeHtml).join(', ')}`);
-  if (tags && tags.length) parts.push(`<strong>Tags :</strong> ${tags.map(t => '<span class="message-tag">#' + escapeHtml(t) + '</span>').join(' ')}`);
+  if (tags && tags.length) parts.push(`<strong>Tags :</strong> ${tags.map(t => '<span class="message-tag" style="background:' + tagColor(t) + '">#' + escapeHtml(t) + '</span>').join(' ')}`);
   meta.innerHTML = parts.join(' &middot; ');
 
   body.innerHTML = formatWhatsApp(content || '');
@@ -1386,6 +1466,7 @@ async function openPreviewFromQueue(id) {
       attachments: m.attachments,
       notes: m.notes,
       tags: m.tags,
+      timezone: m.timezone,
     });
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
@@ -1402,6 +1483,7 @@ function openPreviewFromHistory(idx) {
     attachments: r.attachments,
     notes: r.notes,
     tags: r.tags,
+    timezone: r.timezone,
   });
 }
 
@@ -1627,14 +1709,15 @@ function renderHistoryFiltered() {
 
   const tbody = document.getElementById('history-body');
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">Aucun envoi (ou filtres trop restrictifs)</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text-light)">Aucun envoi (ou filtres trop restrictifs)</td></tr>';
     return;
   }
   window._historyRows = rows;
 
   tbody.innerHTML = rows.map((r, idx) => `
     <tr>
-      <td>${formatDate(r.sent_at)}</td>
+      <td>${formatDate(r.sent_at, r.timezone)}</td>
+      <td style="font-size:11px;color:var(--text-light)">${escapeHtml(tzShort(r.timezone || 'Europe/Paris'))}</td>
       <td>${escapeHtml(r.group_name)}</td>
       <td>${escapeHtml((r.content || '').substring(0, 80))}</td>
       <td class="status-${r.status}">${r.status === 'sent' ? 'Envoye' : 'Erreur'}</td>
@@ -1668,10 +1751,25 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-function formatDate(isoString) {
-  if (!isoString) return '-';
-  const d = new Date(isoString);
-  return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+function formatDate(dateStr, tz) {
+  // Our dates are stored as local time in the message's timezone (format "YYYY-MM-DDTHH:MM" or "YYYY-MM-DDTHH:MM:SS")
+  // No timezone suffix — parsing with Date() would be ambiguous.
+  // We parse manually for accurate display without shifting.
+  if (!dateStr) return '-';
+  const m = String(dateStr).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return dateStr;
+  const base = `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+  if (tz && tz !== userTimezone) {
+    // Show short TZ code to distinguish from default
+    return `${base} (${tzShort(tz)})`;
+  }
+  return base;
+}
+
+function tzShort(tz) {
+  if (!tz) return '';
+  const parts = tz.split('/');
+  return parts[parts.length - 1].replace(/_/g, ' ');
 }
 
 // ==============================
@@ -1691,6 +1789,7 @@ async function saveAsDraft(silent = false) {
   }
   const ed = document.getElementById('message-content');
   const { text, mentions } = getEditorText(ed);
+  const timezone = document.getElementById('message-timezone')?.value || userTimezone || 'Europe/Paris';
   const payload = {
     groups: [...selectedGroups, ...selectedContacts],
     content: text,
@@ -1698,6 +1797,7 @@ async function saveAsDraft(silent = false) {
     notes: (document.getElementById('message-notes')?.value || '').trim(),
     tags: [...selectedTags],
     mentions,
+    timezone,
   };
   try {
     let res;

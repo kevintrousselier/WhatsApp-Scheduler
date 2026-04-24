@@ -11,8 +11,9 @@ const scheduler = require('./scheduler');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-function localNow() {
-  return new Date().toLocaleString('sv-SE', { timeZone: process.env.TZ || 'Europe/Paris' }).replace(' ', 'T');
+function localNow(tz) {
+  const zone = tz || process.env.TZ || 'Europe/Paris';
+  return new Date().toLocaleString('sv-SE', { timeZone: zone }).replace(' ', 'T');
 }
 
 const UPLOADS_DIR = path.join(__dirname, '..', 'data', 'uploads');
@@ -123,6 +124,25 @@ app.post('/api/users', (req, res) => {
     if (err.message.includes('UNIQUE')) {
       return res.status(409).json({ error: 'Ce nom existe deja' });
     }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Return current user details (including timezone)
+app.get('/api/users/me', requireUser, (req, res) => {
+  const user = db.getUserById(req.userId);
+  res.json(user);
+});
+
+app.put('/api/users/:id/timezone', requireUser, (req, res) => {
+  const id = parseInt(req.params.id);
+  if (id !== req.userId) return res.status(403).json({ error: 'Forbidden' });
+  const { timezone } = req.body;
+  if (!timezone) return res.status(400).json({ error: 'timezone required' });
+  try {
+    const user = db.setUserTimezone(id, timezone);
+    res.json(user);
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -251,17 +271,21 @@ app.post('/api/refresh', requireUser, async (req, res) => {
 // --- Messages ---
 app.post('/api/messages', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, send_now, notes, tags, mentions } = req.body;
+    const { groups, content, attachments, scheduled_at, send_now, notes, tags, mentions, timezone } = req.body;
     if (!groups || !groups.length) return res.status(400).json({ error: 'At least one recipient required' });
     if (!content && (!attachments || !attachments.length)) return res.status(400).json({ error: 'Content or attachments required' });
 
+    const user = db.getUserById(req.userId);
+    const tz = timezone || (user && user.timezone) || 'Europe/Paris';
+
     const message = db.createMessage(req.userId, {
       groups, content: content || '', attachments: attachments || [],
-      scheduled_at: send_now ? localNow() : scheduled_at,
+      scheduled_at: send_now ? localNow(tz) : scheduled_at,
       status: 'pending',
       notes: notes || '',
       tags: tags || [],
       mentions: mentions || [],
+      timezone: tz,
     });
 
     if (send_now) {
@@ -284,7 +308,9 @@ app.get('/api/drafts', requireUser, (req, res) => {
 
 app.post('/api/drafts', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, notes, tags, mentions } = req.body;
+    const { groups, content, attachments, notes, tags, mentions, timezone } = req.body;
+    const user = db.getUserById(req.userId);
+    const tz = timezone || (user && user.timezone) || 'Europe/Paris';
     const msg = db.createMessage(req.userId, {
       groups: groups || [],
       content: content || '',
@@ -294,6 +320,7 @@ app.post('/api/drafts', requireUser, (req, res) => {
       notes: notes || '',
       tags: tags || [],
       mentions: mentions || [],
+      timezone: tz,
     });
     res.status(201).json(msg);
   } catch (err) {
@@ -322,7 +349,9 @@ app.delete('/api/drafts/:id', requireUser, (req, res) => {
 app.post('/api/drafts/:id/promote', requireUser, (req, res) => {
   try {
     const { scheduled_at, send_now } = req.body;
-    const when = send_now ? localNow() : scheduled_at;
+    const draft = db.getMessageById(parseInt(req.params.id));
+    const tz = (draft && draft.timezone) || 'Europe/Paris';
+    const when = send_now ? localNow(tz) : scheduled_at;
     if (!when) return res.status(400).json({ error: 'scheduled_at or send_now required' });
     const msg = db.promoteDraft(parseInt(req.params.id), req.userId, when);
     if (!msg) return res.status(404).json({ error: 'Draft not found' });
@@ -341,8 +370,8 @@ app.get('/api/messages/:id', requireUser, (req, res) => {
 
 app.put('/api/messages/:id', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, notes, tags, mentions } = req.body;
-    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags, mentions });
+    const { groups, content, attachments, scheduled_at, notes, tags, mentions, timezone } = req.body;
+    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags, mentions, timezone });
     if (!message) return res.status(404).json({ error: 'Message not found or already sent' });
     res.json(message);
   } catch (err) {
@@ -363,8 +392,8 @@ app.post('/api/messages/:id/send', requireUser, async (req, res) => {
     if (message.status !== 'pending') return res.status(400).json({ error: 'Message already processed' });
     db.updateMessage(message.id, req.userId, {
       groups: message.groups, content: message.content,
-      attachments: message.attachments, scheduled_at: localNow(),
-      notes: message.notes, tags: message.tags, mentions: message.mentions,
+      attachments: message.attachments, scheduled_at: localNow(message.timezone),
+      notes: message.notes, tags: message.tags, mentions: message.mentions, timezone: message.timezone,
     });
     scheduler.processDueMessages().catch(console.error);
     res.json({ success: true });
@@ -419,11 +448,12 @@ app.get('/api/history/export', (req, res) => {
   req.userId = userId;
   const { status, group_name, date_from, date_to } = req.query;
   const rows = db.getHistory(req.userId, { status, group_name, date_from, date_to });
-  const csvHeader = 'Date,Groupe,Message,Statut,Erreur\n';
+  const csvHeader = 'Date,Fuseau,Groupe,Message,Statut,Erreur\n';
   const csvRows = rows.map((r) => {
     const content = (r.content || '').replace(/"/g, '""').substring(0, 200);
     const error = (r.error || '').replace(/"/g, '""');
-    return `"${r.sent_at}","${r.group_name}","${content}","${r.status}","${error}"`;
+    const tz = r.timezone || 'Europe/Paris';
+    return `"${r.sent_at}","${tz}","${r.group_name}","${content}","${r.status}","${error}"`;
   }).join('\n');
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
   res.setHeader('Content-Disposition', 'attachment; filename=historique-envois.csv');
