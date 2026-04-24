@@ -128,6 +128,13 @@ app.post('/api/users', (req, res) => {
   }
 });
 
+// App config (exposes non-secret config values like Maps API key)
+app.get('/api/config', (req, res) => {
+  res.json({
+    googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || '',
+  });
+});
+
 // Return current user details (including timezone)
 app.get('/api/users/me', requireUser, (req, res) => {
   const user = db.getUserById(req.userId);
@@ -271,9 +278,22 @@ app.post('/api/refresh', requireUser, async (req, res) => {
 // --- Messages ---
 app.post('/api/messages', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, send_now, notes, tags, mentions, timezone } = req.body;
+    const { groups, content, attachments, scheduled_at, send_now, notes, tags, mentions, timezone, type, poll, location, recurrence } = req.body;
     if (!groups || !groups.length) return res.status(400).json({ error: 'At least one recipient required' });
-    if (!content && (!attachments || !attachments.length)) return res.status(400).json({ error: 'Content or attachments required' });
+
+    // Validate based on type
+    const msgType = type || 'text';
+    if (msgType === 'poll') {
+      if (!poll || !poll.question || !Array.isArray(poll.options) || poll.options.length < 2) {
+        return res.status(400).json({ error: 'Poll requires question and at least 2 options' });
+      }
+    } else if (msgType === 'location') {
+      if (!location || typeof location.latitude !== 'number' || typeof location.longitude !== 'number') {
+        return res.status(400).json({ error: 'Location requires latitude and longitude' });
+      }
+    } else {
+      if (!content && (!attachments || !attachments.length)) return res.status(400).json({ error: 'Content or attachments required' });
+    }
 
     const user = db.getUserById(req.userId);
     const tz = timezone || (user && user.timezone) || 'Europe/Paris';
@@ -286,6 +306,10 @@ app.post('/api/messages', requireUser, (req, res) => {
       tags: tags || [],
       mentions: mentions || [],
       timezone: tz,
+      type: msgType,
+      poll: poll || null,
+      location: location || null,
+      recurrence: recurrence || null,
     });
 
     if (send_now) {
@@ -301,6 +325,90 @@ app.get('/api/messages', requireUser, (req, res) => {
   res.json(db.getPendingMessages(req.userId));
 });
 
+// --- Batch messages (J-7, J-3, J-1, Day J, etc.) ---
+app.post('/api/messages/batch', requireUser, (req, res) => {
+  try {
+    const { groups, content, attachments, notes, tags, mentions, timezone, type, poll, location, recurrence, referenceDate, offsets } = req.body;
+    if (!groups || !groups.length) return res.status(400).json({ error: 'At least one recipient required' });
+    if (!referenceDate) return res.status(400).json({ error: 'referenceDate required' });
+    if (!Array.isArray(offsets) || offsets.length === 0) return res.status(400).json({ error: 'offsets array required' });
+
+    const user = db.getUserById(req.userId);
+    const tz = timezone || (user && user.timezone) || 'Europe/Paris';
+    const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const created = [];
+
+    // referenceDate expected as YYYY-MM-DDTHH:MM (local time in tz)
+    const m = String(referenceDate).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+    if (!m) return res.status(400).json({ error: 'Invalid referenceDate format (expected YYYY-MM-DDTHH:MM)' });
+    const refY = parseInt(m[1]), refMo = parseInt(m[2]) - 1, refD = parseInt(m[3]);
+    const refH = m[4], refMi = m[5];
+
+    for (const off of offsets) {
+      const daysOffset = parseInt(off.days || 0);
+      const customTime = off.time; // "HH:MM" optional, else use reference time
+      const dt = new Date(Date.UTC(refY, refMo, refD));
+      dt.setUTCDate(dt.getUTCDate() + daysOffset);
+      const y = dt.getUTCFullYear(), mo = String(dt.getUTCMonth() + 1).padStart(2, '0'), d = String(dt.getUTCDate()).padStart(2, '0');
+      const t = customTime || `${refH}:${refMi}`;
+      const scheduled = `${y}-${mo}-${d}T${t}`;
+
+      const msg = db.createMessage(req.userId, {
+        groups,
+        content: content || '',
+        attachments: attachments || [],
+        scheduled_at: scheduled,
+        status: 'pending',
+        notes: notes || '',
+        tags: tags || [],
+        mentions: mentions || [],
+        timezone: tz,
+        type: type || 'text',
+        poll: poll || null,
+        location: location || null,
+        recurrence: recurrence || null,
+        batch_group_id: batchId,
+      });
+      created.push(msg);
+    }
+
+    res.status(201).json({ batch_group_id: batchId, count: created.length, messages: created });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Retry a failed message from history ---
+app.post('/api/history/:sendLogId/retry', requireUser, async (req, res) => {
+  try {
+    const logId = parseInt(req.params.sendLogId);
+    const history = db.getHistory(req.userId);
+    const entry = history.find(h => h.id === logId);
+    if (!entry) return res.status(404).json({ error: 'Entry not found' });
+
+    const user = db.getUserById(req.userId);
+    const tz = entry.timezone || (user && user.timezone) || 'Europe/Paris';
+
+    const msg = db.createMessage(req.userId, {
+      groups: [{ id: entry.group_id, name: entry.group_name }],
+      content: entry.content || '',
+      attachments: entry.attachments || [],
+      scheduled_at: localNow(tz),
+      status: 'pending',
+      notes: entry.notes || '',
+      tags: entry.tags || [],
+      timezone: tz,
+      type: entry.type || 'text',
+      poll: entry.poll || null,
+      location: entry.location || null,
+    });
+    scheduler.processDueMessages().catch(console.error);
+    res.json({ success: true, message: msg });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Drafts ---
 app.get('/api/drafts', requireUser, (req, res) => {
   res.json(db.getDrafts(req.userId));
@@ -308,7 +416,7 @@ app.get('/api/drafts', requireUser, (req, res) => {
 
 app.post('/api/drafts', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, notes, tags, mentions, timezone } = req.body;
+    const { groups, content, attachments, notes, tags, mentions, timezone, type, poll, location, recurrence } = req.body;
     const user = db.getUserById(req.userId);
     const tz = timezone || (user && user.timezone) || 'Europe/Paris';
     const msg = db.createMessage(req.userId, {
@@ -321,6 +429,10 @@ app.post('/api/drafts', requireUser, (req, res) => {
       tags: tags || [],
       mentions: mentions || [],
       timezone: tz,
+      type: type || 'text',
+      poll: poll || null,
+      location: location || null,
+      recurrence: recurrence || null,
     });
     res.status(201).json(msg);
   } catch (err) {
@@ -330,8 +442,9 @@ app.post('/api/drafts', requireUser, (req, res) => {
 
 app.put('/api/drafts/:id', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, notes, tags, mentions } = req.body;
-    const msg = db.updateDraft(parseInt(req.params.id), req.userId, { groups, content, attachments, notes, tags, mentions });
+    const { groups, content, attachments, notes, tags, mentions, timezone, type, poll, location, recurrence } = req.body;
+    // Reuse updateMessage which handles both draft and pending statuses now
+    const msg = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at: null, notes, tags, mentions, timezone, type, poll, location, recurrence });
     if (!msg) return res.status(404).json({ error: 'Draft not found' });
     res.json(msg);
   } catch (err) {
@@ -370,8 +483,8 @@ app.get('/api/messages/:id', requireUser, (req, res) => {
 
 app.put('/api/messages/:id', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, notes, tags, mentions, timezone } = req.body;
-    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags, mentions, timezone });
+    const { groups, content, attachments, scheduled_at, notes, tags, mentions, timezone, type, poll, location, recurrence } = req.body;
+    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags, mentions, timezone, type, poll, location, recurrence });
     if (!message) return res.status(404).json({ error: 'Message not found or already sent' });
     res.json(message);
   } catch (err) {
@@ -467,6 +580,33 @@ app.post('/api/upload', requireUser, upload.array('files', 10), (req, res) => {
     filename: f.filename, originalname: f.originalname, size: f.size, mimetype: f.mimetype,
   }));
   res.json(files);
+});
+
+// Upload + convert audio to ogg/opus for WhatsApp voice message
+const { exec } = require('child_process');
+app.post('/api/upload-audio', requireUser, upload.single('audio'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No audio file' });
+  const userDir = path.join(UPLOADS_DIR, String(req.userId));
+  const inputPath = req.file.path;
+  const outputName = `${Date.now()}-voice.ogg`;
+  const outputPath = path.join(userDir, outputName);
+  // Convert to ogg/opus mono 48kHz (WhatsApp voice format)
+  const cmd = `ffmpeg -y -i "${inputPath}" -c:a libopus -b:a 64k -ac 1 -ar 48000 "${outputPath}"`;
+  exec(cmd, { timeout: 60000 }, (err) => {
+    try { fs.unlinkSync(inputPath); } catch (_) {}
+    if (err) {
+      console.error('[Audio] ffmpeg error:', err.message);
+      return res.status(500).json({ error: 'Audio conversion failed' });
+    }
+    const stat = fs.statSync(outputPath);
+    res.json({
+      filename: outputName,
+      originalname: 'voice-message.ogg',
+      size: stat.size,
+      mimetype: 'audio/ogg',
+      voice: true,
+    });
+  });
 });
 
 // --- Start ---

@@ -77,6 +77,26 @@ async function init() {
       db.run("ALTER TABLE messages ADD COLUMN timezone TEXT DEFAULT 'Europe/Paris'");
       console.log('[Database] Migrated messages: added timezone column');
     }
+    if (!cols.some(c => c.name === 'type')) {
+      db.run("ALTER TABLE messages ADD COLUMN type TEXT DEFAULT 'text'");
+      console.log('[Database] Migrated messages: added type column');
+    }
+    if (!cols.some(c => c.name === 'poll_json')) {
+      db.run("ALTER TABLE messages ADD COLUMN poll_json TEXT");
+      console.log('[Database] Migrated messages: added poll_json');
+    }
+    if (!cols.some(c => c.name === 'location_json')) {
+      db.run("ALTER TABLE messages ADD COLUMN location_json TEXT");
+      console.log('[Database] Migrated messages: added location_json');
+    }
+    if (!cols.some(c => c.name === 'recurrence_json')) {
+      db.run("ALTER TABLE messages ADD COLUMN recurrence_json TEXT");
+      console.log('[Database] Migrated messages: added recurrence_json');
+    }
+    if (!cols.some(c => c.name === 'batch_group_id')) {
+      db.run("ALTER TABLE messages ADD COLUMN batch_group_id TEXT");
+      console.log('[Database] Migrated messages: added batch_group_id');
+    }
   } catch (err) {
     console.error('[Database] Messages migration error:', err.message);
   }
@@ -194,6 +214,11 @@ function parseMessage(row) {
     mentions: JSON.parse(row.mentions_json || '[]'),
     notes: row.notes || '',
     timezone: row.timezone || 'Europe/Paris',
+    type: row.type || 'text',
+    poll: row.poll_json ? JSON.parse(row.poll_json) : null,
+    location: row.location_json ? JSON.parse(row.location_json) : null,
+    recurrence: row.recurrence_json ? JSON.parse(row.recurrence_json) : null,
+    batch_group_id: row.batch_group_id || null,
   };
 }
 
@@ -215,6 +240,9 @@ function parseHistoryRow(row) {
     mentions: JSON.parse(row.mentions_json || '[]'),
     notes: row.notes || '',
     timezone: row.timezone || 'Europe/Paris',
+    type: row.type || 'text',
+    poll: row.poll_json ? JSON.parse(row.poll_json) : null,
+    location: row.location_json ? JSON.parse(row.location_json) : null,
   };
 }
 
@@ -247,11 +275,21 @@ module.exports = {
   },
 
   // --- Messages ---
-  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [], mentions = [], timezone = 'Europe/Paris' }) {
+  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [], mentions = [], timezone = 'Europe/Paris', type = 'text', poll = null, location = null, recurrence = null, batch_group_id = null }) {
     const id = runInsert(
-      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json, mentions_json, timezone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), timezone || 'Europe/Paris']
+      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json, mentions_json, timezone, type, poll_json, location_json, recurrence_json, batch_group_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId, JSON.stringify(groups), content, JSON.stringify(attachments),
+        scheduled_at || null, status, notes || '',
+        JSON.stringify(tags || []), JSON.stringify(mentions || []),
+        timezone || 'Europe/Paris',
+        type || 'text',
+        poll ? JSON.stringify(poll) : null,
+        location ? JSON.stringify(location) : null,
+        recurrence ? JSON.stringify(recurrence) : null,
+        batch_group_id || null,
+      ]
     );
     return this.getMessageById(id);
   },
@@ -309,13 +347,17 @@ module.exports = {
     return getAll("SELECT * FROM messages WHERE status = 'pending'").map(parseMessage);
   },
 
-  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [], mentions = [], timezone }) {
+  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [], mentions = [], timezone, type, poll, location, recurrence }) {
     const existing = this.getMessageById(id);
     const tz = timezone || (existing && existing.timezone) || 'Europe/Paris';
+    const t = type || (existing && existing.type) || 'text';
+    const p = poll !== undefined ? (poll ? JSON.stringify(poll) : null) : (existing && existing.poll ? JSON.stringify(existing.poll) : null);
+    const l = location !== undefined ? (location ? JSON.stringify(location) : null) : (existing && existing.location ? JSON.stringify(existing.location) : null);
+    const r = recurrence !== undefined ? (recurrence ? JSON.stringify(recurrence) : null) : (existing && existing.recurrence ? JSON.stringify(existing.recurrence) : null);
     runQuery(
-      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?, mentions_json = ?, timezone = ?
-       WHERE id = ? AND user_id = ? AND status = 'pending'`,
-      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), tz, id, userId]
+      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?, mentions_json = ?, timezone = ?, type = ?, poll_json = ?, location_json = ?, recurrence_json = ?
+       WHERE id = ? AND user_id = ? AND status IN ('pending', 'draft')`,
+      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), tz, t, p, l, r, id, userId]
     );
     return this.getMessageById(id);
   },
@@ -451,7 +493,7 @@ module.exports = {
   },
 
   getHistory(userId, filters = {}) {
-    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json, m.mentions_json, m.timezone FROM send_log sl
+    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json, m.mentions_json, m.timezone, m.type, m.poll_json, m.location_json FROM send_log sl
                JOIN messages m ON sl.message_id = m.id WHERE sl.user_id = ?`;
     const params = [userId];
 

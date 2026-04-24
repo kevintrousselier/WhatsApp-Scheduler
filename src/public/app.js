@@ -17,6 +17,14 @@ let filterState = { queue: {}, history: {} };
 let currentDraftId = null;
 let autoSaveTimer = null;
 let userTimezone = 'Europe/Paris';
+let currentMessageType = 'text';
+let currentLocation = null;
+let googleMapsLoaded = false;
+let googleMapsApiKey = '';
+let locationMap = null;
+let locationMarker = null;
+let audioRecorder = null;
+let audioChunks = [];
 
 const TIMEZONES = [
   { value: 'Europe/Paris', label: 'Europe/Paris (UTC+1/+2)' },
@@ -52,6 +60,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initFormatToolbars();
   initKeyboardShortcuts();
   initComposeEditor();
+  initLivePreview();
+  initConfig();
 
   // Check if user was previously selected
   const savedUserId = sessionStorage.getItem('userId');
@@ -884,10 +894,265 @@ function showSettings() {
 function initComposeEditor() {
   const ed = document.getElementById('message-content');
   if (!ed) return;
-  // Mention detection on input
   ed.addEventListener('input', onComposeInput);
   ed.addEventListener('keydown', onComposeKeydown);
   ed.addEventListener('blur', () => setTimeout(hideMentionDropdown, 150));
+  ed.addEventListener('input', updateLivePreview);
+}
+
+async function initConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const c = await res.json();
+    googleMapsApiKey = c.googleMapsApiKey || '';
+  } catch (_) {}
+}
+
+function initLivePreview() {
+  // Initial render
+  updateLivePreview();
+}
+
+function updateLivePreview() {
+  const pv = document.getElementById('live-preview');
+  if (!pv) return;
+  const ed = document.getElementById('message-content');
+  if (!ed) return;
+  const { text } = getEditorText(ed);
+  pv.innerHTML = formatWhatsApp(text) || '<em style="color:var(--text-light)">Tapez un message...</em>';
+}
+
+// ==============================
+//  MESSAGE TYPE SELECTOR
+// ==============================
+function setMessageType(type) {
+  currentMessageType = type;
+  ['text', 'poll', 'location'].forEach(t => {
+    const btn = document.getElementById(`msgtype-${t}`);
+    if (btn) btn.classList.toggle('active', t === type);
+  });
+  // Show/hide relevant forms
+  document.getElementById('text-form').classList.toggle('hidden', type !== 'text');
+  document.getElementById('poll-form').classList.toggle('hidden', type !== 'poll');
+  document.getElementById('location-form').classList.toggle('hidden', type !== 'location');
+  document.getElementById('group-mode').classList.toggle('hidden', type !== 'text');
+  document.getElementById('attachments-form-group').classList.toggle('hidden', type !== 'text');
+
+  if (type === 'poll') {
+    const container = document.getElementById('poll-options');
+    if (container && container.children.length === 0) {
+      addPollOption();
+      addPollOption();
+    }
+  } else if (type === 'location') {
+    loadGoogleMaps().then(() => initLocationMap()).catch(err => toast('Erreur chargement Google Maps: ' + err.message, 'error'));
+  }
+}
+
+// ==============================
+//  POLLS
+// ==============================
+function addPollOption() {
+  const container = document.getElementById('poll-options');
+  if (!container) return;
+  if (container.children.length >= 12) { toast('Maximum 12 options', 'info'); return; }
+  const idx = container.children.length;
+  const row = document.createElement('div');
+  row.className = 'poll-option-row';
+  row.innerHTML = `
+    <input type="text" class="input poll-option-input" placeholder="Option ${idx + 1}">
+    <button type="button" class="btn btn-xs btn-danger" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  container.appendChild(row);
+}
+
+function getPollData() {
+  const question = (document.getElementById('poll-question').value || '').trim();
+  const options = Array.from(document.querySelectorAll('.poll-option-input'))
+    .map(i => i.value.trim())
+    .filter(v => v.length > 0);
+  const allowMultipleAnswers = document.getElementById('poll-multi').checked;
+  return { question, options, allowMultipleAnswers };
+}
+
+function resetPollForm() {
+  document.getElementById('poll-question').value = '';
+  document.getElementById('poll-multi').checked = false;
+  document.getElementById('poll-options').innerHTML = '';
+}
+
+// ==============================
+//  LOCATION (Google Maps)
+// ==============================
+function loadGoogleMaps() {
+  return new Promise((resolve, reject) => {
+    if (googleMapsLoaded) return resolve();
+    if (!googleMapsApiKey) return reject(new Error('Aucune cle API Google Maps configuree sur le serveur'));
+    if (window.google && window.google.maps) { googleMapsLoaded = true; return resolve(); }
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${googleMapsApiKey}&libraries=places&callback=__gmapsReady`;
+    script.async = true;
+    script.defer = true;
+    window.__gmapsReady = () => { googleMapsLoaded = true; resolve(); };
+    script.onerror = () => reject(new Error('Impossible de charger Google Maps'));
+    document.head.appendChild(script);
+  });
+}
+
+function initLocationMap() {
+  if (!window.google || !window.google.maps) return;
+  const mapEl = document.getElementById('location-map');
+  if (!mapEl) return;
+
+  const defaultCenter = { lat: 48.8566, lng: 2.3522 }; // Paris
+  locationMap = new google.maps.Map(mapEl, { center: defaultCenter, zoom: 12, streetViewControl: false, mapTypeControl: false });
+  locationMarker = null;
+
+  locationMap.addListener('click', (e) => {
+    setLocationMarker(e.latLng.lat(), e.latLng.lng());
+  });
+
+  // Restore existing location if any
+  if (currentLocation) {
+    setLocationMarker(currentLocation.latitude, currentLocation.longitude, false);
+    locationMap.setCenter({ lat: currentLocation.latitude, lng: currentLocation.longitude });
+    locationMap.setZoom(15);
+  }
+}
+
+function setLocationMarker(lat, lng, reverseGeocode = true) {
+  if (!locationMap) return;
+  if (locationMarker) locationMarker.setMap(null);
+  locationMarker = new google.maps.Marker({ position: { lat, lng }, map: locationMap });
+  currentLocation = { latitude: lat, longitude: lng, description: currentLocation?.description || '' };
+  document.getElementById('location-info').textContent = `Coord: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  if (reverseGeocode && window.google && google.maps.Geocoder) {
+    const geocoder = new google.maps.Geocoder();
+    geocoder.geocode({ location: { lat, lng } }, (results, status) => {
+      if (status === 'OK' && results[0]) {
+        document.getElementById('location-info').textContent = `${results[0].formatted_address} (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+        const descInput = document.getElementById('location-description');
+        if (descInput && !descInput.value) descInput.value = results[0].formatted_address;
+      }
+    });
+  }
+}
+
+async function searchLocation() {
+  const q = document.getElementById('location-search').value.trim();
+  if (!q || !window.google) return;
+  const geocoder = new google.maps.Geocoder();
+  geocoder.geocode({ address: q }, (results, status) => {
+    if (status === 'OK' && results[0]) {
+      const loc = results[0].geometry.location;
+      locationMap.setCenter(loc);
+      locationMap.setZoom(15);
+      setLocationMarker(loc.lat(), loc.lng(), false);
+      document.getElementById('location-info').textContent = `${results[0].formatted_address} (${loc.lat().toFixed(5)}, ${loc.lng().toFixed(5)})`;
+      const descInput = document.getElementById('location-description');
+      if (descInput && !descInput.value) descInput.value = results[0].formatted_address;
+    } else {
+      toast('Adresse introuvable', 'error');
+    }
+  });
+}
+
+function getLocationData() {
+  if (!currentLocation) return null;
+  const description = (document.getElementById('location-description').value || '').trim();
+  return { latitude: currentLocation.latitude, longitude: currentLocation.longitude, description };
+}
+
+function resetLocationForm() {
+  currentLocation = null;
+  const s = document.getElementById('location-search'); if (s) s.value = '';
+  const d = document.getElementById('location-description'); if (d) d.value = '';
+  const i = document.getElementById('location-info'); if (i) i.textContent = '';
+  if (locationMarker) { locationMarker.setMap(null); locationMarker = null; }
+}
+
+// ==============================
+//  AUDIO RECORDING (webm -> server-side opus)
+// ==============================
+async function toggleAudioRecording() {
+  const btn = document.getElementById('btn-record-audio');
+  const status = document.getElementById('audio-rec-status');
+  if (audioRecorder && audioRecorder.state === 'recording') {
+    audioRecorder.stop();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    audioRecorder = new MediaRecorder(stream);
+    audioRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+    audioRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      btn.textContent = '🎤 Enregistrer un message audio';
+      btn.classList.remove('recording');
+      status.textContent = 'Envoi en cours...';
+      const blob = new Blob(audioChunks, { type: audioChunks[0]?.type || 'audio/webm' });
+      const form = new FormData();
+      form.append('audio', blob, 'voice.webm');
+      try {
+        const res = await api('/api/upload-audio', { method: 'POST', body: form });
+        const data = await res.json();
+        if (res.ok) {
+          uploadedFiles.push(data);
+          renderFileList();
+          status.textContent = 'Audio ajoute';
+        } else {
+          status.textContent = '';
+          toast(data.error || 'Erreur', 'error');
+        }
+      } catch (err) {
+        status.textContent = '';
+        toast('Erreur: ' + err.message, 'error');
+      }
+    };
+    audioRecorder.start();
+    btn.textContent = '⏹ Arreter';
+    btn.classList.add('recording');
+    status.textContent = 'Enregistrement...';
+  } catch (err) {
+    toast('Micro indisponible: ' + err.message, 'error');
+  }
+}
+
+// ==============================
+//  RECURRENCE / BATCH
+// ==============================
+function toggleRecurrence() {
+  const on = document.getElementById('enable-recurrence').checked;
+  document.getElementById('recurrence-form').classList.toggle('hidden', !on);
+}
+
+function toggleBatch() {
+  const on = document.getElementById('enable-batch').checked;
+  document.getElementById('batch-form').classList.toggle('hidden', !on);
+}
+
+function getRecurrenceData() {
+  const enabled = document.getElementById('enable-recurrence').checked;
+  if (!enabled) return null;
+  return {
+    frequency: document.getElementById('recurrence-frequency').value,
+    interval: parseInt(document.getElementById('recurrence-interval').value || 1),
+    endDate: document.getElementById('recurrence-enddate').value || null,
+  };
+}
+
+function getBatchData() {
+  const enabled = document.getElementById('enable-batch').checked;
+  if (!enabled) return null;
+  const reference = document.getElementById('batch-reference').value;
+  if (!reference) return null;
+  const offsets = Array.from(document.querySelectorAll('.batch-offset:checked')).map(cb => ({
+    days: parseInt(cb.value),
+    time: cb.dataset.time || null,
+  }));
+  if (offsets.length === 0) return null;
+  return { reference, offsets };
 }
 
 let mentionAnchorNode = null;
@@ -1213,13 +1478,32 @@ async function sendNow() {
 }
 
 async function scheduleMessage() {
+  const batch = getBatchData();
   const datetime = document.getElementById('schedule-datetime').value;
-  if (!datetime) { toast('Selectionnez une date et heure', 'error'); return; }
+  if (!batch && !datetime) { toast('Selectionnez une date et heure (ou activez la planification batch)', 'error'); return; }
   const payload = buildPayload();
   if (!payload) return;
+
+  if (batch) {
+    payload.referenceDate = batch.reference;
+    payload.offsets = batch.offsets;
+    try {
+      const res = await api('/api/messages/batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast(`${data.count} message(s) programme(s)`, 'success');
+        resetForm();
+      } else {
+        toast(data.error || 'Erreur', 'error');
+      }
+    } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+    return;
+  }
+
   payload.scheduled_at = datetime;
 
-  // Promote draft instead of creating new message
   if (currentDraftId && !editingMessageId) {
     const ok = await promoteCurrentDraft(datetime, false);
     if (ok) { toast('Message programme !', 'success'); resetForm(); return; }
@@ -1243,17 +1527,36 @@ function buildPayload() {
   const ed = document.getElementById('message-content');
   const { text, mentions } = getEditorText(ed);
   const content = text.trim();
-  if (!content && uploadedFiles.length === 0) { toast('Redigez un message ou ajoutez un fichier', 'error'); return null; }
   const notes = (document.getElementById('message-notes')?.value || '').trim();
   const timezone = document.getElementById('message-timezone')?.value || userTimezone || 'Europe/Paris';
-  return {
-    groups: allRecipients, content,
-    attachments: uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname })),
+  const type = currentMessageType;
+
+  const base = {
+    groups: allRecipients,
+    content,
+    attachments: uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname, voice: !!f.voice })),
     notes,
     tags: [...selectedTags],
     mentions,
     timezone,
+    type,
+    recurrence: getRecurrenceData(),
   };
+
+  if (type === 'poll') {
+    const p = getPollData();
+    if (!p.question) { toast('Question du sondage requise', 'error'); return null; }
+    if (p.options.length < 2) { toast('Au moins 2 options', 'error'); return null; }
+    base.poll = p;
+  } else if (type === 'location') {
+    const l = getLocationData();
+    if (!l) { toast('Selectionnez un emplacement sur la carte', 'error'); return null; }
+    base.location = l;
+  } else {
+    if (!content && uploadedFiles.length === 0) { toast('Redigez un message ou ajoutez un fichier', 'error'); return null; }
+  }
+
+  return base;
 }
 
 function resetForm() {
@@ -1273,6 +1576,22 @@ function resetForm() {
   renderGroups(); renderContacts(); renderFileList();
   editingMessageId = null;
   currentDraftId = null;
+
+  // Reset type-specific forms
+  resetPollForm();
+  resetLocationForm();
+  setMessageType('text');
+
+  // Reset recurrence and batch
+  const recCb = document.getElementById('enable-recurrence');
+  if (recCb) { recCb.checked = false; toggleRecurrence(); }
+  const batchCb = document.getElementById('enable-batch');
+  if (batchCb) { batchCb.checked = false; toggleBatch(); }
+  document.querySelectorAll('.batch-offset').forEach(cb => cb.checked = false);
+  const batchRef = document.getElementById('batch-reference'); if (batchRef) batchRef.value = '';
+
+  // Live preview
+  updateLivePreview();
 }
 
 // --- Queue ---
@@ -1725,8 +2044,23 @@ function renderHistoryFiltered() {
       <td style="white-space:nowrap">
         <button class="btn btn-xs" onclick="openPreviewFromHistory(${idx})">Apercu</button>
         <button class="btn btn-xs" onclick="duplicateHistoryMessage(${idx})">Dupliquer</button>
+        ${r.status === 'error' ? `<button class="btn btn-xs btn-primary" onclick="retryFromHistory(${r.id})">Relancer</button>` : ''}
       </td>
     </tr>`).join('');
+}
+
+async function retryFromHistory(sendLogId) {
+  if (!confirm('Relancer cet envoi ?')) return;
+  try {
+    const res = await api(`/api/history/${sendLogId}/retry`, { method: 'POST' });
+    if (res.ok) {
+      toast('Envoi relance !', 'success');
+      loadHistory();
+    } else {
+      const d = await res.json();
+      toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 function exportCSV() {

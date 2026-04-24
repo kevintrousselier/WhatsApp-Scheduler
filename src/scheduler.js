@@ -20,20 +20,30 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
   try {
     const hasAttachments = message.attachments && message.attachments.length > 0;
     const content = message.content || '';
-    // Mentions are only valid for group chats
     const isGroup = (group.id || '').endsWith('@g.us');
     const mentionsOpt = (isGroup && Array.isArray(message.mentions) && message.mentions.length > 0)
       ? { mentions: message.mentions }
       : {};
 
-    if (hasAttachments) {
+    const type = message.type || 'text';
+
+    if (type === 'poll' && message.poll) {
+      await waClient.sendPoll(group.id, message.poll);
+    } else if (type === 'location' && message.location) {
+      await waClient.sendLocation(group.id, message.location);
+      if (content) await waClient.sendMessage(group.id, content);
+    } else if (hasAttachments) {
       for (let i = 0; i < message.attachments.length; i++) {
         const attachment = message.attachments[i];
         const filePath = path.join(__dirname, '..', 'data', 'uploads', String(message.user_id), attachment.filename);
-        const caption = i === 0 ? content : '';
-        // Mentions go with the caption (first attachment)
-        const opts = i === 0 ? mentionsOpt : {};
-        await waClient.sendMedia(group.id, filePath, caption, opts);
+        const isAudioVoice = attachment.voice === true;
+        if (isAudioVoice) {
+          await waClient.sendAudio(group.id, filePath, true);
+        } else {
+          const caption = i === 0 ? content : '';
+          const opts = i === 0 ? mentionsOpt : {};
+          await waClient.sendMedia(group.id, filePath, caption, opts);
+        }
         if (i < message.attachments.length - 1) await sleep(2000);
       }
     } else if (content) {
@@ -120,7 +130,68 @@ async function processDueMessages() {
       allSent ? 'sent' : 'error',
       allSent ? null : 'Some recipients failed — check send_log'
     );
+
+    // If message has recurrence and was sent OK, schedule the next occurrence
+    if (allSent && message.recurrence) {
+      try {
+        const next = computeNextOccurrence(message.scheduled_at, message.recurrence);
+        if (next) {
+          db.createMessage(message.user_id, {
+            groups: message.groups,
+            content: message.content,
+            attachments: message.attachments,
+            scheduled_at: next,
+            status: 'pending',
+            notes: message.notes,
+            tags: message.tags,
+            mentions: message.mentions,
+            timezone: message.timezone,
+            type: message.type,
+            poll: message.poll,
+            location: message.location,
+            recurrence: message.recurrence,
+            batch_group_id: message.batch_group_id,
+          });
+          console.log(`[Scheduler] Created recurring next occurrence at ${next}`);
+        }
+      } catch (err) {
+        console.error('[Scheduler] Recurrence scheduling error:', err.message);
+      }
+    }
   }
+}
+
+// Compute next occurrence for a recurrence pattern
+// recurrence = { frequency: 'daily'|'weekly'|'monthly', interval: number, endDate?: 'YYYY-MM-DD' }
+function computeNextOccurrence(currentLocalStr, recurrence) {
+  if (!recurrence || !currentLocalStr) return null;
+  const interval = Math.max(1, parseInt(recurrence.interval || 1));
+  // Parse local string manually (no TZ shift)
+  const m = String(currentLocalStr).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return null;
+  let [_, Y, Mo, D, H, Mi] = m;
+  let year = parseInt(Y), month = parseInt(Mo) - 1, day = parseInt(D);
+  const hour = parseInt(H), minute = parseInt(Mi);
+
+  if (recurrence.frequency === 'daily') {
+    const dt = new Date(Date.UTC(year, month, day));
+    dt.setUTCDate(dt.getUTCDate() + interval);
+    year = dt.getUTCFullYear(); month = dt.getUTCMonth(); day = dt.getUTCDate();
+  } else if (recurrence.frequency === 'weekly') {
+    const dt = new Date(Date.UTC(year, month, day));
+    dt.setUTCDate(dt.getUTCDate() + 7 * interval);
+    year = dt.getUTCFullYear(); month = dt.getUTCMonth(); day = dt.getUTCDate();
+  } else if (recurrence.frequency === 'monthly') {
+    month += interval;
+    while (month > 11) { month -= 12; year++; }
+  } else {
+    return null;
+  }
+
+  const next = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+  // Check end date
+  if (recurrence.endDate && next.slice(0, 10) > recurrence.endDate) return null;
+  return next;
 }
 
 async function refreshAllContactsAndGroups() {

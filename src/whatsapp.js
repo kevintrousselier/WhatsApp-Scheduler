@@ -1,4 +1,4 @@
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia, Poll, Location } = require('whatsapp-web.js');
 const path = require('path');
 const fs = require('fs');
 const EventEmitter = require('events');
@@ -193,6 +193,29 @@ class WhatsAppClient extends EventEmitter {
     if (!fs.existsSync(absolutePath)) throw new Error(`File not found: ${absolutePath}`);
     const media = MessageMedia.fromFilePath(absolutePath);
     return this.client.sendMessage(recipientId, media, { caption, ...options });
+  }
+
+  async sendAudio(recipientId, filePath, asVoice = true) {
+    if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
+    this.touchActivity();
+    const absolutePath = path.resolve(filePath);
+    if (!fs.existsSync(absolutePath)) throw new Error(`File not found: ${absolutePath}`);
+    const media = MessageMedia.fromFilePath(absolutePath);
+    return this.client.sendMessage(recipientId, media, { sendAudioAsVoice: asVoice });
+  }
+
+  async sendPoll(recipientId, { question, options, allowMultipleAnswers }) {
+    if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
+    this.touchActivity();
+    const poll = new Poll(question, options, { allowMultipleAnswers: !!allowMultipleAnswers });
+    return this.client.sendMessage(recipientId, poll);
+  }
+
+  async sendLocation(recipientId, { latitude, longitude, description }) {
+    if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
+    this.touchActivity();
+    const loc = new Location(latitude, longitude, description || '');
+    return this.client.sendMessage(recipientId, loc);
   }
 
   _cleanLocks(dir) {

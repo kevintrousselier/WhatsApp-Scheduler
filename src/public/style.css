@@ -940,6 +940,56 @@ emoji-picker {
   background: var(--bg);
 }
 
+/* Compose split view with live preview */
+.compose-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.compose-editor { min-width: 0; }
+.compose-live-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.compose-live-preview-label {
+  font-size: 10px;
+  color: var(--text-light);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.compose-live-preview .wa-bubble {
+  flex: 1;
+  min-height: 100px;
+}
+@media (max-width: 768px) {
+  .compose-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Poll options */
+.poll-option-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.poll-option-row input {
+  flex: 1;
+}
+
+/* Audio recording */
+#btn-record-audio.recording {
+  background: var(--danger);
+  color: white;
+  border-color: var(--danger);
+  animation: pulse 1.5s infinite;
+}
+
 /* Preview modal (message as WhatsApp bubble) */
 .preview-modal-content {
   max-width: 520px !important;
