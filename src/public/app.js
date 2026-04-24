@@ -25,6 +25,10 @@ let locationMap = null;
 let locationMarker = null;
 let audioRecorder = null;
 let audioChunks = [];
+let audioTimerInterval = null;
+let audioStartTime = 0;
+let recordedAudioFile = null;
+let recordedAudioBlobUrl = null;
 
 const TIMEZONES = [
   { value: 'Europe/Paris', label: 'Europe/Paris (UTC+1/+2)' },
@@ -1243,49 +1247,114 @@ function tryRecordAudio() {
   toggleAudioRecording();
 }
 
+function formatTimer(ms) {
+  const s = Math.floor(ms / 1000);
+  const m = Math.floor(s / 60);
+  return `${String(m).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function stopAudioRecording() {
+  if (audioRecorder && audioRecorder.state === 'recording') {
+    audioRecorder.stop();
+  }
+}
+
+function deleteRecordedAudio() {
+  // Remove the file from uploaded files
+  if (recordedAudioFile) {
+    uploadedFiles = uploadedFiles.filter(f => f.filename !== recordedAudioFile.filename);
+    renderFileList();
+    recordedAudioFile = null;
+  }
+  // Revoke the blob URL
+  if (recordedAudioBlobUrl) {
+    URL.revokeObjectURL(recordedAudioBlobUrl);
+    recordedAudioBlobUrl = null;
+  }
+  document.getElementById('audio-preview').classList.add('hidden');
+  document.getElementById('audio-preview-player').src = '';
+  toast('Audio supprime', 'info');
+}
+
 async function toggleAudioRecording() {
   const btn = document.getElementById('btn-record-audio');
-  const status = document.getElementById('audio-rec-status');
+  const recorderUI = document.getElementById('audio-recorder');
+  const previewUI = document.getElementById('audio-preview');
+
   if (audioRecorder && audioRecorder.state === 'recording') {
     audioRecorder.stop();
     return;
   }
+
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     return;
   }
+
+  // Clear any previous preview
+  if (recordedAudioBlobUrl) {
+    URL.revokeObjectURL(recordedAudioBlobUrl);
+    recordedAudioBlobUrl = null;
+  }
+  previewUI.classList.add('hidden');
+
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
     audioRecorder = new MediaRecorder(stream);
     audioRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+
     audioRecorder.onstop = async () => {
       stream.getTracks().forEach(t => t.stop());
-      btn.textContent = '🎤 Enregistrer un message audio';
+      clearInterval(audioTimerInterval);
+      audioTimerInterval = null;
+
+      recorderUI.classList.add('hidden');
       btn.classList.remove('recording');
-      status.textContent = 'Envoi en cours...';
-      const blob = new Blob(audioChunks, { type: audioChunks[0]?.type || 'audio/webm' });
+      btn.textContent = '🎤 Enregistrer un message audio';
+
+      const mime = audioChunks[0]?.type || 'audio/webm';
+      const blob = new Blob(audioChunks, { type: mime });
+
+      // Show local preview immediately
+      recordedAudioBlobUrl = URL.createObjectURL(blob);
+      const player = document.getElementById('audio-preview-player');
+      player.src = recordedAudioBlobUrl;
+      previewUI.classList.remove('hidden');
+
+      // Upload and convert server-side
       const form = new FormData();
       form.append('audio', blob, 'voice.webm');
       try {
         const res = await api('/api/upload-audio', { method: 'POST', body: form });
         const data = await res.json();
         if (res.ok) {
+          // Remove any previously recorded audio from uploadedFiles
+          if (recordedAudioFile) {
+            uploadedFiles = uploadedFiles.filter(f => f.filename !== recordedAudioFile.filename);
+          }
+          recordedAudioFile = data;
           uploadedFiles.push(data);
           renderFileList();
-          status.textContent = 'Audio ajoute';
         } else {
-          status.textContent = '';
-          toast(data.error || 'Erreur', 'error');
+          toast(data.error || 'Erreur envoi audio', 'error');
         }
       } catch (err) {
-        status.textContent = '';
         toast('Erreur: ' + err.message, 'error');
       }
     };
+
     audioRecorder.start();
-    btn.textContent = '⏹ Arreter';
+    audioStartTime = Date.now();
     btn.classList.add('recording');
-    status.textContent = 'Enregistrement...';
+    btn.textContent = '⏹ Arreter l\'enregistrement';
+
+    // Show recorder UI with timer
+    recorderUI.classList.remove('hidden');
+    const timerEl = document.getElementById('audio-rec-timer');
+    timerEl.textContent = '00:00';
+    audioTimerInterval = setInterval(() => {
+      timerEl.textContent = formatTimer(Date.now() - audioStartTime);
+    }, 200);
   } catch (err) {
     toast('Micro indisponible: ' + err.message, 'error');
   }
@@ -1838,6 +1907,16 @@ function resetForm() {
 
   // Exit template mode if we were editing one
   exitTemplateMode();
+
+  // Reset audio preview
+  if (recordedAudioBlobUrl) { URL.revokeObjectURL(recordedAudioBlobUrl); recordedAudioBlobUrl = null; }
+  recordedAudioFile = null;
+  const ap = document.getElementById('audio-preview');
+  if (ap) ap.classList.add('hidden');
+  const app = document.getElementById('audio-preview-player');
+  if (app) app.src = '';
+  const ar = document.getElementById('audio-recorder');
+  if (ar) ar.classList.add('hidden');
 }
 
 // --- Queue ---

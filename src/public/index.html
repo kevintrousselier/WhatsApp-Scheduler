@@ -172,10 +172,27 @@
             <label>Ajouter au message</label>
             <div class="addon-toolbar">
               <button type="button" class="btn btn-sm" onclick="addAddon('attachments')">&#128206; Fichier</button>
-              <button type="button" class="btn btn-sm" onclick="tryRecordAudio()" id="btn-record-audio" title="Necessite HTTPS. Vous pouvez aussi uploader un fichier audio via 'Fichier'">&#127908; Audio</button>
+              <button type="button" class="btn btn-sm" onclick="tryRecordAudio()" id="btn-record-audio">&#127908; Enregistrer un message audio</button>
               <button type="button" class="btn btn-sm" onclick="addAddon('poll')">&#128202; Sondage</button>
               <button type="button" class="btn btn-sm" onclick="addAddon('location')">&#128205; Localisation</button>
-              <span id="audio-rec-status" style="font-size:12px;color:var(--text-light);margin-left:8px"></span>
+            </div>
+            <!-- Audio recorder widget -->
+            <div id="audio-recorder" class="audio-recorder hidden">
+              <div class="audio-rec-header">
+                <span class="audio-rec-icon">&#127908;</span>
+                <span id="audio-rec-label">Enregistrement...</span>
+                <span id="audio-rec-timer" class="audio-rec-timer">00:00</span>
+                <button type="button" class="btn btn-sm btn-danger" onclick="stopAudioRecording()">Arreter</button>
+              </div>
+            </div>
+            <!-- Audio preview (after recording) -->
+            <div id="audio-preview" class="audio-preview hidden">
+              <div class="audio-rec-header">
+                <span class="audio-rec-icon">&#127908;</span>
+                <span>Message audio enregistre</span>
+                <button type="button" class="btn btn-xs btn-danger" onclick="deleteRecordedAudio()" style="margin-left:auto">Supprimer</button>
+              </div>
+              <audio id="audio-preview-player" controls style="width:100%;margin-top:8px"></audio>
             </div>
             <input type="file" id="file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4,.mp3,.ogg,.m4a,.wav,.aac">
           </div>

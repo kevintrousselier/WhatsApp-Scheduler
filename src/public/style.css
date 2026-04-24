@@ -1104,6 +1104,46 @@ emoji-picker {
   animation: pulse 1.5s infinite;
 }
 
+.audio-recorder,
+.audio-preview {
+  margin-top: 10px;
+  padding: 12px 14px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.audio-recorder {
+  border-color: var(--danger);
+  background: #fff5f5;
+}
+
+.audio-rec-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.audio-rec-icon {
+  font-size: 20px;
+  animation: pulse 1.5s infinite;
+}
+
+.audio-preview .audio-rec-icon {
+  animation: none;
+}
+
+.audio-rec-timer {
+  font-family: monospace;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--danger);
+  margin-left: auto;
+  margin-right: 8px;
+}
+
 /* Preview modal (message as WhatsApp bubble) */
 .preview-modal-content {
   max-width: 520px !important;
