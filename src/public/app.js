@@ -15,6 +15,8 @@ let tplAttachments = [];
 document.addEventListener('DOMContentLoaded', () => {
   initNavigation();
   initDropZone();
+  initFormatToolbars();
+  initKeyboardShortcuts();
 
   // Check if user was previously selected
   const savedUserId = sessionStorage.getItem('userId');
@@ -540,6 +542,91 @@ function insertAtCursor(textarea, text) {
   textarea.focus();
 }
 
+// --- Formatting toolbar ---
+function wrapSelection(textarea, wrap) {
+  const start = textarea.selectionStart ?? 0;
+  const end = textarea.selectionEnd ?? 0;
+  const selected = textarea.value.substring(start, end) || 'texte';
+  const before = textarea.value.substring(0, start);
+  const after = textarea.value.substring(end);
+  textarea.value = before + wrap + selected + wrap + after;
+  textarea.selectionStart = start + wrap.length;
+  textarea.selectionEnd = start + wrap.length + selected.length;
+  textarea.focus();
+}
+
+function prefixLines(textarea, prefix) {
+  const start = textarea.selectionStart ?? 0;
+  const end = textarea.selectionEnd ?? 0;
+  const selected = textarea.value.substring(start, end);
+  const before = textarea.value.substring(0, start);
+  const after = textarea.value.substring(end);
+  const prefixed = selected ? selected.split('\n').map((l) => prefix + l).join('\n') : prefix;
+  textarea.value = before + prefixed + after;
+  textarea.selectionStart = textarea.selectionEnd = start + prefixed.length;
+  textarea.focus();
+}
+
+function initKeyboardShortcuts() {
+  document.addEventListener('keydown', (e) => {
+    const active = document.activeElement;
+    const inTextarea = active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT');
+
+    // Escape: close any open modal
+    if (e.key === 'Escape') {
+      const qr = document.getElementById('qr-modal');
+      const pv = document.getElementById('preview-modal');
+      if (qr && !qr.classList.contains('hidden')) hideQRCode();
+      if (pv && !pv.classList.contains('hidden')) closePreviewModal();
+      return;
+    }
+
+    // Ctrl+Enter: send/schedule
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      const composeSection = document.getElementById('section-compose');
+      if (composeSection && !composeSection.classList.contains('hidden')) {
+        e.preventDefault();
+        const dt = document.getElementById('schedule-datetime').value;
+        if (dt) scheduleMessage(); else sendNow();
+      }
+      return;
+    }
+
+    // Ctrl+B/I inside textareas -> apply formatting
+    if ((e.ctrlKey || e.metaKey) && inTextarea && (active.id === 'message-content' || active.id === 'tpl-content')) {
+      if (e.key.toLowerCase() === 'b') { e.preventDefault(); wrapSelection(active, '*'); }
+      else if (e.key.toLowerCase() === 'i') { e.preventDefault(); wrapSelection(active, '_'); }
+    }
+
+    // "/" focuses group search if not typing
+    if (e.key === '/' && !inTextarea) {
+      const search = document.getElementById('group-search');
+      if (search && document.getElementById('section-compose') && !document.getElementById('section-compose').classList.contains('hidden')) {
+        e.preventDefault();
+        search.focus();
+      }
+    }
+  });
+}
+
+function initFormatToolbars() {
+  document.querySelectorAll('.format-toolbar').forEach((toolbar) => {
+    if (toolbar.dataset.initialized) return;
+    toolbar.dataset.initialized = '1';
+    const targetId = toolbar.dataset.target;
+    toolbar.querySelectorAll('.fmt-btn').forEach((btn) => {
+      if (btn.classList.contains('fmt-emoji')) return; // has its own onclick
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        const textarea = document.getElementById(targetId);
+        if (!textarea) return;
+        if (btn.dataset.wrap) wrapSelection(textarea, btn.dataset.wrap);
+        else if (btn.dataset.prefix) prefixLines(textarea, btn.dataset.prefix);
+      });
+    });
+  });
+}
+
 // --- File upload ---
 function initDropZone() {
   const zone = document.getElementById('drop-zone');
@@ -586,6 +673,8 @@ function formatSize(bytes) {
 async function sendNow() {
   const payload = buildPayload();
   if (!payload) return;
+  const nb = payload.groups.length;
+  if (!confirm(`Envoyer ce message maintenant a ${nb} destinataire${nb > 1 ? 's' : ''} ?`)) return;
   payload.send_now = true;
   try {
     const res = await api('/api/messages', {
@@ -616,14 +705,22 @@ async function scheduleMessage() {
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
+function parseTagsInput(str) {
+  return (str || '').split(/[\s,]+/).map((t) => t.trim().replace(/^#/, '')).filter((t) => t.length > 0);
+}
+
 function buildPayload() {
   const allRecipients = [...selectedGroups, ...selectedContacts];
   if (allRecipients.length === 0) { toast('Selectionnez au moins un groupe ou un contact', 'error'); return null; }
   const content = document.getElementById('message-content').value.trim();
   if (!content && uploadedFiles.length === 0) { toast('Redigez un message ou ajoutez un fichier', 'error'); return null; }
+  const notes = (document.getElementById('message-notes')?.value || '').trim();
+  const tags = parseTagsInput(document.getElementById('message-tags')?.value);
   return {
     groups: allRecipients, content,
     attachments: uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname })),
+    notes,
+    tags,
   };
 }
 
@@ -634,6 +731,10 @@ function resetForm() {
   document.getElementById('group-search').value = '';
   document.getElementById('contact-search').value = '';
   document.getElementById('message-preview').classList.add('hidden');
+  const notesEl = document.getElementById('message-notes');
+  if (notesEl) notesEl.value = '';
+  const tagsEl = document.getElementById('message-tags');
+  if (tagsEl) tagsEl.value = '';
   renderGroups(); renderContacts(); renderFileList();
   editingMessageId = null;
 }
@@ -647,7 +748,9 @@ async function loadQueue() {
 
     if (messages.length === 0) { container.innerHTML = '<p class="empty">Aucun message programme.</p>'; return; }
 
-    container.innerHTML = messages.map((m) => `
+    container.innerHTML = messages.map((m) => {
+      const tags = Array.isArray(m.tags) ? m.tags : [];
+      return `
       <div class="queue-item">
         <div class="queue-item-header">
           <span class="date">${formatDate(m.scheduled_at)}</span>
@@ -657,31 +760,141 @@ async function loadQueue() {
           ${m.groups.map((g) => `<span class="group-tag">${escapeHtml(g.name)}</span>`).join('')}
         </div>
         <div class="queue-item-content">${escapeHtml(m.content).substring(0, 200)}</div>
-        ${m.attachments.length > 0 ? `<div style="font-size:12px;color:var(--text-light)">${m.attachments.length} piece(s) jointe(s)</div>` : ''}
+        ${m.attachments.length > 0 ? `<div style="font-size:12px;color:var(--text-light)">&#128206; ${m.attachments.length} piece(s) jointe(s)</div>` : ''}
+        ${tags.length > 0 ? `<div class="message-tags">${tags.map(t => `<span class="message-tag">#${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+        ${m.notes ? `<div style="font-size:12px;color:#7d6608;background:#fef9e7;padding:6px 8px;border-radius:4px;margin-top:6px">&#128221; ${escapeHtml(m.notes)}</div>` : ''}
         <div class="queue-item-actions">
+          <button class="btn btn-sm" onclick='openPreviewFromQueue(${m.id})'>Apercu</button>
           <button class="btn btn-sm" onclick="editQueueMessage(${m.id})">Modifier</button>
+          <button class="btn btn-sm" onclick='duplicateQueueMessage(${m.id})'>Dupliquer</button>
           <button class="btn btn-sm btn-primary" onclick="sendQueueMessage(${m.id})">Envoyer maintenant</button>
           <button class="btn btn-sm btn-danger" onclick="deleteQueueMessage(${m.id})">Supprimer</button>
         </div>
-      </div>`).join('');
+      </div>`;
+    }).join('');
   } catch (err) { console.error('Failed to load queue:', err); }
+}
+
+function fillComposeFromMessage(msg, { keepId = false, keepDate = true } = {}) {
+  selectedGroups = Array.isArray(msg.groups) ? [...msg.groups] : [];
+  selectedContacts = [];
+  uploadedFiles = Array.isArray(msg.attachments) ? [...msg.attachments] : [];
+  document.getElementById('message-content').value = msg.content || '';
+  const dt = document.getElementById('schedule-datetime');
+  if (keepDate && msg.scheduled_at) dt.value = String(msg.scheduled_at).slice(0, 16);
+  else dt.value = '';
+  const notesEl = document.getElementById('message-notes');
+  if (notesEl) notesEl.value = msg.notes || '';
+  const tagsEl = document.getElementById('message-tags');
+  if (tagsEl) tagsEl.value = Array.isArray(msg.tags) ? msg.tags.map(t => '#' + t).join(' ') : '';
+  editingMessageId = keepId ? msg.id : null;
+  renderGroups(); renderContacts(); renderFileList();
+  // Switch to compose section
+  document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
+  document.querySelector('[data-section="compose"]').classList.add('active');
+  document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
+  document.getElementById('section-compose').classList.remove('hidden');
 }
 
 async function editQueueMessage(id) {
   try {
     const res = await api(`/api/messages/${id}`);
     const msg = await res.json();
-    selectedGroups = msg.groups; uploadedFiles = msg.attachments || [];
-    document.getElementById('message-content').value = msg.content;
-    if (msg.scheduled_at) document.getElementById('schedule-datetime').value = msg.scheduled_at.slice(0, 16);
-    editingMessageId = id;
-    renderGroups(); renderFileList();
-    document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
-    document.querySelector('[data-section="compose"]').classList.add('active');
-    document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
-    document.getElementById('section-compose').classList.remove('hidden');
+    fillComposeFromMessage(msg, { keepId: true, keepDate: true });
     toast('Message charge pour modification', 'info');
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+async function duplicateQueueMessage(id) {
+  try {
+    const res = await api(`/api/messages/${id}`);
+    const msg = await res.json();
+    fillComposeFromMessage(msg, { keepId: false, keepDate: false });
+    toast('Message duplique — ajustez et programmez', 'info');
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+function duplicateHistoryMessage(idx) {
+  const rows = window._historyRows || [];
+  const row = rows[idx];
+  if (!row) return;
+  fillComposeFromMessage({
+    groups: [{ id: row.group_id, name: row.group_name }],
+    attachments: row.attachments || [],
+    content: row.content || '',
+    notes: row.notes || '',
+    tags: row.tags || [],
+  }, { keepId: false, keepDate: false });
+  toast('Message duplique depuis l\'historique', 'info');
+}
+
+// --- Preview modal ---
+function openPreviewModal({ scheduledAt, sentAt, status, recipients, content, attachments, notes, tags }) {
+  const modal = document.getElementById('preview-modal');
+  const meta = document.getElementById('preview-modal-meta');
+  const body = document.getElementById('preview-modal-body');
+  const atts = document.getElementById('preview-modal-attachments');
+  const notesEl = document.getElementById('preview-modal-notes');
+
+  const parts = [];
+  if (scheduledAt) parts.push(`<strong>Programme :</strong> ${formatDate(scheduledAt)}`);
+  if (sentAt) parts.push(`<strong>Envoye :</strong> ${formatDate(sentAt)}`);
+  if (status) parts.push(`<strong>Statut :</strong> <span class="status-${status}">${status === 'sent' ? 'Envoye' : status === 'error' ? 'Erreur' : status}</span>`);
+  if (recipients && recipients.length) parts.push(`<strong>Destinataire(s) :</strong> ${recipients.map(escapeHtml).join(', ')}`);
+  if (tags && tags.length) parts.push(`<strong>Tags :</strong> ${tags.map(t => '<span class="message-tag">#' + escapeHtml(t) + '</span>').join(' ')}`);
+  meta.innerHTML = parts.join(' &middot; ');
+
+  body.innerHTML = formatWhatsApp(content || '');
+
+  if (attachments && attachments.length) {
+    atts.innerHTML = attachments.map(a => `<div class="preview-attachment">&#128206; ${escapeHtml(a.originalname || a.filename)}</div>`).join('');
+  } else {
+    atts.innerHTML = '';
+  }
+
+  if (notes && notes.trim()) {
+    notesEl.textContent = '[Notes internes] ' + notes;
+    notesEl.classList.remove('hidden');
+  } else {
+    notesEl.classList.add('hidden');
+  }
+
+  modal.classList.remove('hidden');
+}
+
+function closePreviewModal() {
+  document.getElementById('preview-modal').classList.add('hidden');
+}
+
+async function openPreviewFromQueue(id) {
+  try {
+    const res = await api(`/api/messages/${id}`);
+    const m = await res.json();
+    openPreviewModal({
+      scheduledAt: m.scheduled_at,
+      status: m.status,
+      recipients: (m.groups || []).map(g => g.name),
+      content: m.content,
+      attachments: m.attachments,
+      notes: m.notes,
+      tags: m.tags,
+    });
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+function openPreviewFromHistory(idx) {
+  const rows = window._historyRows || [];
+  const r = rows[idx];
+  if (!r) return;
+  openPreviewModal({
+    sentAt: r.sent_at,
+    status: r.status,
+    recipients: [r.group_name],
+    content: r.content,
+    attachments: r.attachments,
+    notes: r.notes,
+    tags: r.tags,
+  });
 }
 
 async function sendQueueMessage(id) {
@@ -861,17 +1074,24 @@ async function loadHistory() {
     const tbody = document.getElementById('history-body');
 
     if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-light)">Aucun envoi enregistre</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">Aucun envoi enregistre</td></tr>';
       return;
     }
 
-    tbody.innerHTML = rows.map((r) => `
+    // Stash rows for preview/duplicate access
+    window._historyRows = rows;
+
+    tbody.innerHTML = rows.map((r, idx) => `
       <tr>
         <td>${formatDate(r.sent_at)}</td>
         <td>${escapeHtml(r.group_name)}</td>
         <td>${escapeHtml((r.content || '').substring(0, 80))}</td>
         <td class="status-${r.status}">${r.status === 'sent' ? 'Envoye' : 'Erreur'}</td>
         <td>${escapeHtml(r.error || '-')}</td>
+        <td style="white-space:nowrap">
+          <button class="btn btn-xs" onclick="openPreviewFromHistory(${idx})">Apercu</button>
+          <button class="btn btn-xs" onclick="duplicateHistoryMessage(${idx})">Dupliquer</button>
+        </td>
       </tr>`).join('');
   } catch (err) { console.error('Failed to load history:', err); }
 }

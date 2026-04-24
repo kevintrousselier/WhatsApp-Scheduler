@@ -68,6 +68,18 @@
           </div>
         </div>
 
+        <!-- Preview Modal -->
+        <div id="preview-modal" class="modal hidden" onclick="if(event.target===this)closePreviewModal()">
+          <div class="modal-content preview-modal-content">
+            <button class="modal-close" onclick="closePreviewModal()">&times;</button>
+            <h2>Apercu du message</h2>
+            <div id="preview-modal-meta" class="preview-meta"></div>
+            <div id="preview-modal-body" class="wa-bubble"></div>
+            <div id="preview-modal-attachments" class="preview-attachments"></div>
+            <div id="preview-modal-notes" class="preview-notes hidden"></div>
+          </div>
+        </div>
+
         <!-- Section: Profile Selection -->
         <section id="section-profiles" class="section">
           <h2>Choisissez votre profil</h2>
@@ -119,10 +131,18 @@
 
           <div class="form-group">
             <label>Message</label>
+            <div class="format-toolbar" data-target="message-content">
+              <button type="button" class="fmt-btn" data-wrap="*" title="Gras (Ctrl+B)"><b>B</b></button>
+              <button type="button" class="fmt-btn" data-wrap="_" title="Italique (Ctrl+I)"><i>I</i></button>
+              <button type="button" class="fmt-btn" data-wrap="~" title="Barre"><s>S</s></button>
+              <button type="button" class="fmt-btn" data-wrap="```" title="Code">&lt;/&gt;</button>
+              <button type="button" class="fmt-btn" data-prefix="- " title="Liste">&#8226;</button>
+              <span class="fmt-separator"></span>
+              <button type="button" class="fmt-btn fmt-emoji" onclick="toggleEmojiPicker('message-content', this)" title="Emojis">&#128578;</button>
+            </div>
             <div class="textarea-wrapper">
               <textarea id="message-content" class="textarea" rows="6"
-                placeholder="Votre message... (*gras*, _italique_, ~barre~)"></textarea>
-              <button type="button" class="emoji-toggle" onclick="toggleEmojiPicker('message-content', this)" title="Emojis" aria-label="Ajouter un emoji">&#128578;</button>
+                placeholder="Votre message..."></textarea>
             </div>
             <div class="message-preview-toggle">
               <button class="btn btn-xs" onclick="togglePreview()">Apercu</button>
@@ -138,6 +158,16 @@
               <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
             </div>
             <div id="file-list" class="file-list"></div>
+          </div>
+
+          <div class="form-group">
+            <label>Tags (optionnel)</label>
+            <input type="text" id="message-tags" class="input" placeholder="#Corse2026 #Briefing (separes par espace)">
+          </div>
+
+          <div class="form-group">
+            <label>Notes internes (optionnel, non envoyees)</label>
+            <textarea id="message-notes" class="textarea" rows="2" placeholder="Vos annotations personnelles..."></textarea>
           </div>
 
           <div class="form-group">
@@ -177,10 +207,18 @@
             </div>
             <div class="form-group">
               <label>Contenu</label>
+              <div class="format-toolbar" data-target="tpl-content">
+                <button type="button" class="fmt-btn" data-wrap="*" title="Gras"><b>B</b></button>
+                <button type="button" class="fmt-btn" data-wrap="_" title="Italique"><i>I</i></button>
+                <button type="button" class="fmt-btn" data-wrap="~" title="Barre"><s>S</s></button>
+                <button type="button" class="fmt-btn" data-wrap="```" title="Code">&lt;/&gt;</button>
+                <button type="button" class="fmt-btn" data-prefix="- " title="Liste">&#8226;</button>
+                <span class="fmt-separator"></span>
+                <button type="button" class="fmt-btn fmt-emoji" onclick="toggleEmojiPicker('tpl-content', this)" title="Emojis">&#128578;</button>
+              </div>
               <div class="textarea-wrapper">
                 <textarea id="tpl-content" class="textarea" rows="5"
                   placeholder="Contenu du template..."></textarea>
-                <button type="button" class="emoji-toggle" onclick="toggleEmojiPicker('tpl-content', this)" title="Emojis" aria-label="Ajouter un emoji">&#128578;</button>
               </div>
             </div>
             <div class="form-group">
@@ -228,6 +266,7 @@
                 <th>Message</th>
                 <th>Statut</th>
                 <th>Erreur</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody id="history-body"></tbody>

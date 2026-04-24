@@ -43,10 +43,27 @@ async function init() {
       status TEXT NOT NULL DEFAULT 'pending',
       sent_at TEXT,
       error_log TEXT,
+      notes TEXT DEFAULT '',
+      tags_json TEXT DEFAULT '[]',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  // Migration: add notes + tags_json columns to existing messages table
+  try {
+    const cols = getAll("PRAGMA table_info('messages')");
+    if (!cols.some(c => c.name === 'notes')) {
+      db.run("ALTER TABLE messages ADD COLUMN notes TEXT DEFAULT ''");
+      console.log('[Database] Migrated messages: added notes column');
+    }
+    if (!cols.some(c => c.name === 'tags_json')) {
+      db.run("ALTER TABLE messages ADD COLUMN tags_json TEXT DEFAULT '[]'");
+      console.log('[Database] Migrated messages: added tags_json column');
+    }
+  } catch (err) {
+    console.error('[Database] Messages migration error:', err.message);
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS templates (
@@ -131,7 +148,13 @@ function getOne(sql, params = []) {
 
 function parseMessage(row) {
   if (!row) return null;
-  return { ...row, groups: JSON.parse(row.groups_json), attachments: JSON.parse(row.attachments_json || '[]') };
+  return {
+    ...row,
+    groups: JSON.parse(row.groups_json),
+    attachments: JSON.parse(row.attachments_json || '[]'),
+    tags: JSON.parse(row.tags_json || '[]'),
+    notes: row.notes || '',
+  };
 }
 
 function parseTemplate(row) {
@@ -145,7 +168,12 @@ function parseTemplate(row) {
 
 function parseHistoryRow(row) {
   if (!row) return null;
-  return { ...row, attachments: JSON.parse(row.attachments_json || '[]') };
+  return {
+    ...row,
+    attachments: JSON.parse(row.attachments_json || '[]'),
+    tags: JSON.parse(row.tags_json || '[]'),
+    notes: row.notes || '',
+  };
 }
 
 module.exports = {
@@ -172,11 +200,11 @@ module.exports = {
   },
 
   // --- Messages ---
-  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending' }) {
+  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [] }) {
     const id = runInsert(
-      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status]
+      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status, notes || '', JSON.stringify(tags || [])]
     );
     return this.getMessageById(id);
   },
@@ -199,11 +227,11 @@ module.exports = {
     ).map(parseMessage);
   },
 
-  updateMessage(id, userId, { groups, content, attachments, scheduled_at }) {
+  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [] }) {
     runQuery(
-      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?
+      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?
        WHERE id = ? AND user_id = ? AND status = 'pending'`,
-      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, id, userId]
+      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), id, userId]
     );
     return this.getMessageById(id);
   },
@@ -259,7 +287,7 @@ module.exports = {
   },
 
   getHistory(userId, filters = {}) {
-    let sql = `SELECT sl.*, m.content, m.attachments_json FROM send_log sl
+    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json FROM send_log sl
                JOIN messages m ON sl.message_id = m.id WHERE sl.user_id = ?`;
     const params = [userId];
 

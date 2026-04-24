@@ -194,7 +194,7 @@ app.post('/api/refresh', requireUser, async (req, res) => {
 // --- Messages ---
 app.post('/api/messages', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, send_now } = req.body;
+    const { groups, content, attachments, scheduled_at, send_now, notes, tags } = req.body;
     if (!groups || !groups.length) return res.status(400).json({ error: 'At least one recipient required' });
     if (!content && (!attachments || !attachments.length)) return res.status(400).json({ error: 'Content or attachments required' });
 
@@ -202,6 +202,8 @@ app.post('/api/messages', requireUser, (req, res) => {
       groups, content: content || '', attachments: attachments || [],
       scheduled_at: send_now ? localNow() : scheduled_at,
       status: 'pending',
+      notes: notes || '',
+      tags: tags || [],
     });
 
     if (send_now) {
@@ -225,8 +227,8 @@ app.get('/api/messages/:id', requireUser, (req, res) => {
 
 app.put('/api/messages/:id', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at } = req.body;
-    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at });
+    const { groups, content, attachments, scheduled_at, notes, tags } = req.body;
+    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags });
     if (!message) return res.status(404).json({ error: 'Message not found or already sent' });
     res.json(message);
   } catch (err) {
@@ -248,6 +250,7 @@ app.post('/api/messages/:id/send', requireUser, async (req, res) => {
     db.updateMessage(message.id, req.userId, {
       groups: message.groups, content: message.content,
       attachments: message.attachments, scheduled_at: localNow(),
+      notes: message.notes, tags: message.tags,
     });
     scheduler.processDueMessages().catch(console.error);
     res.json({ success: true });
