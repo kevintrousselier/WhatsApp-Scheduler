@@ -797,8 +797,15 @@ function detectMentionAtCaret() {
 }
 
 async function openMentionDropdown() {
-  // Load participants for selected groups (if not already)
-  const promises = selectedGroups.filter(g => g.id.endsWith('@g.us')).map(async (g) => {
+  // Mentions only make sense in GROUPS. If no group selected, show a helper message.
+  const groupRecipients = selectedGroups.filter(g => g.id && g.id.endsWith('@g.us'));
+  if (groupRecipients.length === 0) {
+    showMentionHint("Les mentions ne fonctionnent que dans les groupes. Selectionnez au moins un groupe destinataire.");
+    return;
+  }
+
+  // Load participants for selected groups (cache per group)
+  const promises = groupRecipients.map(async (g) => {
     if (participantsCache[g.id]) return participantsCache[g.id];
     try {
       const res = await api(`/api/groups/${encodeURIComponent(g.id)}/participants`);
@@ -808,11 +815,8 @@ async function openMentionDropdown() {
     } catch (_) { return []; }
   });
 
-  // Also include contacts (for 1-to-1 with contacts)
-  const contactPart = contacts.map(c => ({ id: c.id, number: c.number, name: c.name }));
-
   const arrays = await Promise.all(promises);
-  const all = [].concat(...arrays, contactPart);
+  const all = [].concat(...arrays);
   // Dedupe by id
   const seen = new Set();
   const unique = all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
@@ -826,6 +830,24 @@ async function openMentionDropdown() {
   }).slice(0, 20);
   mentionActiveIdx = 0;
   renderMentionDropdown();
+}
+
+function showMentionHint(msg) {
+  const dd = document.getElementById('mention-dropdown');
+  if (!dd) return;
+  dd.innerHTML = `<div class="mention-item" style="cursor:default;color:var(--text-light);font-size:12px">${escapeHtml(msg)}</div>`;
+  const sel = window.getSelection();
+  if (sel.rangeCount) {
+    const range = sel.getRangeAt(0).cloneRange();
+    const rect = range.getBoundingClientRect();
+    const ed = document.getElementById('message-content');
+    const edRect = ed.getBoundingClientRect();
+    dd.style.position = 'absolute';
+    dd.style.left = (rect.left - edRect.left + ed.scrollLeft) + 'px';
+    dd.style.top = (rect.bottom - edRect.top + ed.scrollTop + 4) + 'px';
+  }
+  dd.classList.remove('hidden');
+  mentionParticipants = [];
 }
 
 function renderMentionDropdown() {
