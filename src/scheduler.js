@@ -28,10 +28,33 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
     const type = message.type || 'text';
 
     if (type === 'poll' && message.poll) {
+      // If there is also text, send text FIRST then poll
+      if (content) await waClient.sendMessage(group.id, content, mentionsOpt);
       await waClient.sendPoll(group.id, message.poll);
     } else if (type === 'location' && message.location) {
       await waClient.sendLocation(group.id, message.location);
-      if (content) await waClient.sendMessage(group.id, content);
+      if (content) await waClient.sendMessage(group.id, content, mentionsOpt);
+    } else if (message.poll && (hasAttachments || content)) {
+      // Text/attachments + poll as add-on: send text/attachments first, then poll
+      if (hasAttachments) {
+        for (let i = 0; i < message.attachments.length; i++) {
+          const attachment = message.attachments[i];
+          const filePath = path.join(__dirname, '..', 'data', 'uploads', String(message.user_id), attachment.filename);
+          const isAudioVoice = attachment.voice === true;
+          if (isAudioVoice) {
+            await waClient.sendAudio(group.id, filePath, true);
+          } else {
+            const caption = i === 0 ? content : '';
+            const opts = i === 0 ? mentionsOpt : {};
+            await waClient.sendMedia(group.id, filePath, caption, opts);
+          }
+          if (i < message.attachments.length - 1) await sleep(2000);
+        }
+      } else if (content) {
+        await waClient.sendMessage(group.id, content, mentionsOpt);
+      }
+      await sleep(1500);
+      await waClient.sendPoll(group.id, message.poll);
     } else if (hasAttachments) {
       for (let i = 0; i < message.attachments.length; i++) {
         const attachment = message.attachments[i];

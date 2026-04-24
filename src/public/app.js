@@ -564,18 +564,23 @@ async function loadTemplate() {
     const res = await api('/api/templates');
     const tpls = await res.json();
     const tpl = tpls.find((t) => t.id === parseInt(select.value));
-    if (tpl) {
-      document.getElementById('message-content').value = tpl.content;
-      if (Array.isArray(tpl.attachments) && tpl.attachments.length > 0) {
-        // Merge template attachments into compose uploads (avoid duplicates)
-        const existingNames = new Set(uploadedFiles.map((f) => f.filename));
-        for (const att of tpl.attachments) {
-          if (!existingNames.has(att.filename)) uploadedFiles.push(att);
-        }
-        renderFileList();
-        toast(`${tpl.attachments.length} piece(s) jointe(s) chargee(s) depuis le template`, 'info');
-      }
-    }
+    if (!tpl) return;
+    // Pre-fill compose with ALL template features
+    const msg = {
+      groups: [...selectedGroups, ...selectedContacts],
+      content: tpl.content,
+      attachments: tpl.attachments || [],
+      notes: tpl.notes,
+      tags: tpl.tags,
+      mentions: tpl.mentions,
+      timezone: tpl.timezone,
+      type: tpl.type,
+      poll: tpl.poll,
+      location: tpl.location,
+      recurrence: tpl.recurrence,
+    };
+    fillComposeFromMessage(msg, { keepId: false, keepDate: false });
+    toast('Template charge', 'info');
   } catch (err) { console.error('Failed to load template:', err); }
 }
 
@@ -791,6 +796,56 @@ function toggleSelectTag(name) {
   if (i >= 0) selectedTags.splice(i, 1);
   else selectedTags.push(name);
   renderTagsSelector();
+  renderQuickSchedule();
+}
+
+function renderQuickSchedule() {
+  const block = document.getElementById('quick-schedule-block');
+  const container = document.getElementById('quick-schedule-events');
+  if (!block || !container) return;
+  // Only selected tags with event_date
+  const events = availableTags.filter(t => selectedTags.includes(t.name) && t.event_date);
+  if (events.length === 0) { block.classList.add('hidden'); container.innerHTML = ''; return; }
+  block.classList.remove('hidden');
+
+  container.innerHTML = events.map(t => {
+    const ev = t.event_date;
+    const evFormatted = formatDate(ev);
+    return `<div class="quick-event-card" data-tag-id="${t.id}">
+      <div class="event-name">#${escapeHtml(t.name)} — ${escapeHtml(evFormatted)}</div>
+      <div class="quick-buttons">
+        <button type="button" class="quick-btn" onclick="applyQuickOffset('${escapeHtml(t.name)}', -14, '09:00')">J-14 a 09h</button>
+        <button type="button" class="quick-btn" onclick="applyQuickOffset('${escapeHtml(t.name)}', -7, '09:00')">J-7 a 09h</button>
+        <button type="button" class="quick-btn" onclick="applyQuickOffset('${escapeHtml(t.name)}', -3, '09:00')">J-3 a 09h</button>
+        <button type="button" class="quick-btn" onclick="applyQuickOffset('${escapeHtml(t.name)}', -1, '18:00')">J-1 a 18h</button>
+        <button type="button" class="quick-btn" onclick="applyQuickOffset('${escapeHtml(t.name)}', 0, null)">Jour J (heure de l'evenement)</button>
+      </div>
+      <div class="custom-offset">
+        Custom : J-<input type="number" class="input input-sm" min="0" id="qc-days-${t.id}" placeholder="7"> a <input type="time" class="input input-sm" id="qc-time-${t.id}" placeholder="09:00"> <button type="button" class="btn btn-xs" onclick="applyCustomOffset('${escapeHtml(t.name)}', ${t.id})">Appliquer</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function applyQuickOffset(tagName, daysOffset, timeOverride) {
+  const tag = availableTags.find(t => t.name === tagName);
+  if (!tag || !tag.event_date) return;
+  const m = String(tag.event_date).match(/(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/);
+  if (!m) return;
+  const dt = new Date(Date.UTC(parseInt(m[1]), parseInt(m[2]) - 1, parseInt(m[3])));
+  dt.setUTCDate(dt.getUTCDate() + daysOffset);
+  const y = dt.getUTCFullYear(), mo = String(dt.getUTCMonth() + 1).padStart(2, '0'), d = String(dt.getUTCDate()).padStart(2, '0');
+  const time = timeOverride || `${m[4]}:${m[5]}`;
+  const dateStr = `${y}-${mo}-${d}T${time}`;
+  const dtInput = document.getElementById('schedule-datetime');
+  if (dtInput) dtInput.value = dateStr;
+  toast(`Programme pour ${formatDate(dateStr)}`, 'success');
+}
+
+function applyCustomOffset(tagName, tagId) {
+  const days = -Math.abs(parseInt(document.getElementById('qc-days-' + tagId).value || 0));
+  const time = document.getElementById('qc-time-' + tagId).value || null;
+  applyQuickOffset(tagName, days, time);
 }
 
 function renderTagsListSettings() {
@@ -801,11 +856,29 @@ function renderTagsListSettings() {
     return;
   }
   container.innerHTML = availableTags.map((t) => `
-    <span class="tag-item" style="background:${tagColor(t.name)}">
-      #${escapeHtml(t.name)}
-      <button class="tag-delete" onclick="deleteTag(${t.id})" title="Supprimer">&times;</button>
-    </span>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:8px;background:var(--card-bg);border:1px solid var(--border);border-radius:8px;flex-wrap:wrap">
+      <span class="tag-item" style="background:${tagColor(t.name)}">#${escapeHtml(t.name)}</span>
+      <input type="datetime-local" value="${t.event_date ? escapeHtml(String(t.event_date).slice(0, 16)) : ''}" id="tag-date-${t.id}" class="input input-sm" style="max-width:200px" onchange="updateTagDate(${t.id})" title="Date d'evenement (optionnel)">
+      <span style="font-size:11px;color:var(--text-light)">${t.event_date ? 'Evenement : ' + formatDate(t.event_date) : '(pas d evenement)'}</span>
+      <button class="btn btn-xs btn-danger" onclick="deleteTag(${t.id})" style="margin-left:auto">Supprimer</button>
+    </div>
   `).join('');
+}
+
+async function updateTagDate(id) {
+  const input = document.getElementById('tag-date-' + id);
+  if (!input) return;
+  const event_date = input.value || null;
+  try {
+    const res = await api(`/api/tags/${id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_date }),
+    });
+    if (res.ok) {
+      await loadAvailableTags();
+      toast('Date mise a jour', 'success');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 async function loadUserTimezone() {
@@ -853,15 +926,18 @@ function renderComposeTimezone() {
 
 async function createTag() {
   const input = document.getElementById('new-tag-name');
+  const dateInput = document.getElementById('new-tag-date');
   const name = (input.value || '').trim();
   if (!name) return;
+  const event_date = dateInput?.value || null;
   try {
     const res = await api('/api/tags', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, event_date }),
     });
     if (res.ok) {
       input.value = '';
+      if (dateInput) dateInput.value = '';
       await loadAvailableTags();
       toast('Tag cree', 'success');
     } else {
@@ -925,19 +1001,31 @@ function updateLivePreview() {
 // ==============================
 //  MESSAGE TYPE SELECTOR
 // ==============================
+// DEPRECATED — replaced by add-on based UI. Kept for backward compat / reset.
 function setMessageType(type) {
-  currentMessageType = type;
+  currentMessageType = type || 'text';
+  // Safe no-op on missing elements (new UI doesn't use all of these)
+  const _toggle = (id, hide) => { const el = document.getElementById(id); if (el) el.classList.toggle('hidden', hide); };
   ['text', 'poll', 'location'].forEach(t => {
     const btn = document.getElementById(`msgtype-${t}`);
     if (btn) btn.classList.toggle('active', t === type);
   });
-  // Show/hide relevant forms
-  document.getElementById('text-form').classList.toggle('hidden', type !== 'text');
-  document.getElementById('poll-form').classList.toggle('hidden', type !== 'poll');
-  document.getElementById('location-form').classList.toggle('hidden', type !== 'location');
-  document.getElementById('group-mode').classList.toggle('hidden', type !== 'text');
-  document.getElementById('attachments-form-group').classList.toggle('hidden', type !== 'text');
+  _toggle('text-form', type !== 'text');
+  _toggle('poll-form', type !== 'poll');
+  _toggle('location-form', type !== 'location');
+  _toggle('group-mode', type !== 'text');
+  _toggle('attachments-form-group', type !== 'text');
+}
 
+// ==============================
+//  ADD-ONS (attachments, audio, poll, location)
+// ==============================
+const activeAddons = { attachments: false, poll: false, location: false };
+
+function addAddon(type) {
+  activeAddons[type] = true;
+  const el = document.getElementById('addon-' + type);
+  if (el) el.classList.remove('hidden');
   if (type === 'poll') {
     const container = document.getElementById('poll-options');
     if (container && container.children.length === 0) {
@@ -945,8 +1033,28 @@ function setMessageType(type) {
       addPollOption();
     }
   } else if (type === 'location') {
-    loadGoogleMaps().then(() => initLocationMap()).catch(err => toast('Erreur chargement Google Maps: ' + err.message, 'error'));
+    loadGoogleMaps().then(() => initLocationMap()).catch(err => {
+      toast('Erreur chargement Google Maps: ' + err.message, 'error');
+    });
   }
+}
+
+function removeAddon(type) {
+  activeAddons[type] = false;
+  const el = document.getElementById('addon-' + type);
+  if (el) el.classList.add('hidden');
+  if (type === 'attachments') {
+    uploadedFiles = uploadedFiles.filter(f => !f.voice);
+    renderFileList();
+  } else if (type === 'poll') {
+    resetPollForm();
+  } else if (type === 'location') {
+    resetLocationForm();
+  }
+}
+
+function resetAddons() {
+  ['attachments', 'poll', 'location'].forEach(t => removeAddon(t));
 }
 
 // ==============================
@@ -1004,7 +1112,7 @@ function initLocationMap() {
   const mapEl = document.getElementById('location-map');
   if (!mapEl) return;
 
-  const defaultCenter = { lat: 48.8566, lng: 2.3522 }; // Paris
+  const defaultCenter = { lat: 48.8566, lng: 2.3522 };
   locationMap = new google.maps.Map(mapEl, { center: defaultCenter, zoom: 12, streetViewControl: false, mapTypeControl: false });
   locationMarker = null;
 
@@ -1012,18 +1120,38 @@ function initLocationMap() {
     setLocationMarker(e.latLng.lat(), e.latLng.lng());
   });
 
-  // Restore existing location if any
   if (currentLocation) {
     setLocationMarker(currentLocation.latitude, currentLocation.longitude, false);
     locationMap.setCenter({ lat: currentLocation.latitude, lng: currentLocation.longitude });
     locationMap.setZoom(15);
   }
+
+  // Force map to resize after container is visible
+  setTimeout(() => { if (locationMap && google.maps.event) google.maps.event.trigger(locationMap, 'resize'); }, 200);
 }
 
 function setLocationMarker(lat, lng, reverseGeocode = true) {
   if (!locationMap) return;
   if (locationMarker) locationMarker.setMap(null);
-  locationMarker = new google.maps.Marker({ position: { lat, lng }, map: locationMap });
+  locationMarker = new google.maps.Marker({
+    position: { lat, lng },
+    map: locationMap,
+    draggable: true,
+  });
+  locationMarker.addListener('dragend', (e) => {
+    const newLat = e.latLng.lat();
+    const newLng = e.latLng.lng();
+    currentLocation = { latitude: newLat, longitude: newLng, description: currentLocation?.description || '' };
+    document.getElementById('location-info').textContent = `Coord: ${newLat.toFixed(5)}, ${newLng.toFixed(5)}`;
+    if (window.google && google.maps.Geocoder) {
+      const geocoder = new google.maps.Geocoder();
+      geocoder.geocode({ location: { lat: newLat, lng: newLng } }, (results, status) => {
+        if (status === 'OK' && results[0]) {
+          document.getElementById('location-info').textContent = `${results[0].formatted_address} (${newLat.toFixed(5)}, ${newLng.toFixed(5)})`;
+        }
+      });
+    }
+  });
   currentLocation = { latitude: lat, longitude: lng, description: currentLocation?.description || '' };
   document.getElementById('location-info').textContent = `Coord: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
   if (reverseGeocode && window.google && google.maps.Geocoder) {
@@ -1036,6 +1164,10 @@ function setLocationMarker(lat, lng, reverseGeocode = true) {
       }
     });
   }
+}
+
+function googleMapsLink(lat, lng) {
+  return `https://maps.google.com/?q=${lat},${lng}`;
 }
 
 async function searchLocation() {
@@ -1127,14 +1259,17 @@ function toggleRecurrence() {
   document.getElementById('recurrence-form').classList.toggle('hidden', !on);
 }
 
-function toggleBatch() {
-  const on = document.getElementById('enable-batch').checked;
-  document.getElementById('batch-form').classList.toggle('hidden', !on);
+function updateRecurrenceMode() {
+  const mode = document.querySelector('input[name="recurrence-mode"]:checked')?.value || 'regular';
+  document.getElementById('recurrence-regular').classList.toggle('hidden', mode !== 'regular');
+  document.getElementById('recurrence-custom').classList.toggle('hidden', mode !== 'custom');
 }
 
 function getRecurrenceData() {
-  const enabled = document.getElementById('enable-recurrence').checked;
+  const enabled = document.getElementById('enable-recurrence')?.checked;
   if (!enabled) return null;
+  const mode = document.querySelector('input[name="recurrence-mode"]:checked')?.value || 'regular';
+  if (mode !== 'regular') return null; // Mode custom is handled as batch, not recurrence
   return {
     frequency: document.getElementById('recurrence-frequency').value,
     interval: parseInt(document.getElementById('recurrence-interval').value || 1),
@@ -1143,16 +1278,38 @@ function getRecurrenceData() {
 }
 
 function getBatchData() {
-  const enabled = document.getElementById('enable-batch').checked;
+  const enabled = document.getElementById('enable-recurrence')?.checked;
   if (!enabled) return null;
+  const mode = document.querySelector('input[name="recurrence-mode"]:checked')?.value;
+  if (mode !== 'custom') return null;
   const reference = document.getElementById('batch-reference').value;
   if (!reference) return null;
-  const offsets = Array.from(document.querySelectorAll('.batch-offset:checked')).map(cb => ({
-    days: parseInt(cb.value),
-    time: cb.dataset.time || null,
-  }));
+  const rows = document.querySelectorAll('#batch-offsets-list .batch-offset-row');
+  const offsets = [];
+  rows.forEach(row => {
+    const daysInput = row.querySelector('.bo-days');
+    const timeInput = row.querySelector('.bo-time');
+    const days = parseInt(daysInput.value || 0);
+    const time = timeInput.value || null;
+    if (!isNaN(days)) offsets.push({ days, time });
+  });
   if (offsets.length === 0) return null;
   return { reference, offsets };
+}
+
+function addBatchOffset(defaultDays = -7, defaultTime = '09:00') {
+  const list = document.getElementById('batch-offsets-list');
+  if (!list) return;
+  const row = document.createElement('div');
+  row.className = 'batch-offset-row';
+  row.innerHTML = `
+    <span style="font-size:13px">J</span>
+    <input type="number" class="input input-sm bo-days" value="${defaultDays}" style="width:70px">
+    <span style="font-size:13px">a</span>
+    <input type="time" class="input input-sm bo-time" value="${defaultTime}">
+    <button type="button" class="btn btn-xs btn-danger" onclick="this.parentElement.remove()">&times;</button>
+  `;
+  list.appendChild(row);
 }
 
 let mentionAnchorNode = null;
@@ -1521,42 +1678,85 @@ async function scheduleMessage() {
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
+function buildComposeState() {
+  const ed = document.getElementById('message-content');
+  const { text, mentions } = ed ? getEditorText(ed) : { text: '', mentions: [] };
+  let content = text.trim();
+
+  const attachments = uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname, voice: !!f.voice }));
+  let poll = null;
+  let location = null;
+
+  if (activeAddons.poll) {
+    const p = getPollData();
+    if (p.question && p.options.length >= 2) poll = p;
+  }
+  if (activeAddons.location) {
+    const l = getLocationData();
+    if (l) {
+      location = l;
+      // Auto-insert Maps link if checkbox checked
+      const insertLink = document.getElementById('location-insert-link')?.checked;
+      if (insertLink) {
+        const link = googleMapsLink(l.latitude, l.longitude);
+        if (!content.includes(link)) {
+          content = (content ? content + '\n\n' : '') + link;
+        }
+      }
+    }
+  }
+
+  return { content, mentions, attachments, poll, location };
+}
+
 function buildPayload() {
   const allRecipients = [...selectedGroups, ...selectedContacts];
   if (allRecipients.length === 0) { toast('Selectionnez au moins un groupe ou un contact', 'error'); return null; }
-  const ed = document.getElementById('message-content');
-  const { text, mentions } = getEditorText(ed);
-  const content = text.trim();
+
+  const state = buildComposeState();
   const notes = (document.getElementById('message-notes')?.value || '').trim();
   const timezone = document.getElementById('message-timezone')?.value || userTimezone || 'Europe/Paris';
-  const type = currentMessageType;
 
-  const base = {
-    groups: allRecipients,
-    content,
-    attachments: uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname, voice: !!f.voice })),
-    notes,
-    tags: [...selectedTags],
-    mentions,
-    timezone,
-    type,
-    recurrence: getRecurrenceData(),
-  };
+  // Validation by add-ons
+  const hasText = !!state.content;
+  const hasPoll = !!state.poll;
+  const hasLocation = !!state.location;
+  const hasAttachments = state.attachments.length > 0;
 
-  if (type === 'poll') {
-    const p = getPollData();
-    if (!p.question) { toast('Question du sondage requise', 'error'); return null; }
-    if (p.options.length < 2) { toast('Au moins 2 options', 'error'); return null; }
-    base.poll = p;
-  } else if (type === 'location') {
-    const l = getLocationData();
-    if (!l) { toast('Selectionnez un emplacement sur la carte', 'error'); return null; }
-    base.location = l;
-  } else {
-    if (!content && uploadedFiles.length === 0) { toast('Redigez un message ou ajoutez un fichier', 'error'); return null; }
+  if (!hasText && !hasPoll && !hasLocation && !hasAttachments) {
+    toast('Ajoutez du contenu (texte, sondage, localisation ou fichier)', 'error');
+    return null;
   }
 
-  return base;
+  // Poll partial validation
+  if (activeAddons.poll) {
+    const p = getPollData();
+    if (!p.question) { toast('Question du sondage requise', 'error'); return null; }
+    if (p.options.length < 2) { toast('Au moins 2 options pour le sondage', 'error'); return null; }
+  }
+  if (activeAddons.location && !state.location) {
+    toast('Selectionnez un emplacement sur la carte', 'error'); return null;
+  }
+
+  // Determine primary type
+  let type = 'text';
+  if (hasLocation) type = 'location';
+  else if (hasPoll && !hasText && !hasAttachments) type = 'poll'; // pure poll
+  // Note: when hasPoll AND hasText, we send them as 2 messages — scheduler handles via type+extraPoll
+
+  return {
+    groups: allRecipients,
+    content: state.content,
+    attachments: state.attachments,
+    notes,
+    tags: [...selectedTags],
+    mentions: state.mentions,
+    timezone,
+    type,
+    poll: state.poll,
+    location: state.location,
+    recurrence: getRecurrenceData(),
+  };
 }
 
 function resetForm() {
@@ -1577,18 +1777,21 @@ function resetForm() {
   editingMessageId = null;
   currentDraftId = null;
 
-  // Reset type-specific forms
+  // Reset add-ons
+  resetAddons();
   resetPollForm();
   resetLocationForm();
-  setMessageType('text');
 
-  // Reset recurrence and batch
+  // Reset recurrence
   const recCb = document.getElementById('enable-recurrence');
   if (recCb) { recCb.checked = false; toggleRecurrence(); }
-  const batchCb = document.getElementById('enable-batch');
-  if (batchCb) { batchCb.checked = false; toggleBatch(); }
-  document.querySelectorAll('.batch-offset').forEach(cb => cb.checked = false);
   const batchRef = document.getElementById('batch-reference'); if (batchRef) batchRef.value = '';
+  const offsetList = document.getElementById('batch-offsets-list'); if (offsetList) offsetList.innerHTML = '';
+  const regularRadio = document.querySelector('input[name="recurrence-mode"][value="regular"]');
+  if (regularRadio) { regularRadio.checked = true; updateRecurrenceMode(); }
+
+  // Quick schedule
+  renderQuickSchedule();
 
   // Live preview
   updateLivePreview();
@@ -1681,6 +1884,8 @@ function renderQueueFiltered() {
 }
 
 function fillComposeFromMessage(msg, { keepId = false, keepDate = true } = {}) {
+  // Reset first
+  resetAddons();
   selectedGroups = Array.isArray(msg.groups) ? [...msg.groups] : [];
   selectedContacts = [];
   uploadedFiles = Array.isArray(msg.attachments) ? [...msg.attachments] : [];
@@ -1695,7 +1900,49 @@ function fillComposeFromMessage(msg, { keepId = false, keepDate = true } = {}) {
   const tzSel = document.getElementById('message-timezone');
   if (tzSel) tzSel.value = msg.timezone || userTimezone || 'Europe/Paris';
   editingMessageId = keepId ? msg.id : null;
+
+  // Restore add-ons
+  if (uploadedFiles.length > 0) {
+    activeAddons.attachments = true;
+    document.getElementById('addon-attachments').classList.remove('hidden');
+  }
+  if (msg.poll) {
+    activeAddons.poll = true;
+    document.getElementById('addon-poll').classList.remove('hidden');
+    document.getElementById('poll-question').value = msg.poll.question || '';
+    document.getElementById('poll-multi').checked = !!msg.poll.allowMultipleAnswers;
+    const container = document.getElementById('poll-options');
+    container.innerHTML = '';
+    (msg.poll.options || []).forEach(opt => {
+      addPollOption();
+      const last = container.lastElementChild.querySelector('.poll-option-input');
+      if (last) last.value = opt;
+    });
+  }
+  if (msg.location) {
+    activeAddons.location = true;
+    document.getElementById('addon-location').classList.remove('hidden');
+    currentLocation = { ...msg.location };
+    const descInput = document.getElementById('location-description');
+    if (descInput) descInput.value = msg.location.description || '';
+    loadGoogleMaps().then(() => initLocationMap()).catch(() => {});
+  }
+
+  // Recurrence
+  if (msg.recurrence) {
+    document.getElementById('enable-recurrence').checked = true;
+    toggleRecurrence();
+    document.querySelector('input[name="recurrence-mode"][value="regular"]').checked = true;
+    updateRecurrenceMode();
+    document.getElementById('recurrence-interval').value = msg.recurrence.interval || 1;
+    document.getElementById('recurrence-frequency').value = msg.recurrence.frequency || 'weekly';
+    document.getElementById('recurrence-enddate').value = msg.recurrence.endDate || '';
+  }
+
   renderGroups(); renderContacts(); renderFileList();
+  renderQuickSchedule();
+  updateLivePreview();
+
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
   document.querySelector('[data-section="compose"]').classList.add('active');
   document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
@@ -2114,6 +2361,39 @@ function hasDraftableContent() {
   if (!ed) return false;
   const { text } = getEditorText(ed);
   return text.trim().length > 0 || uploadedFiles.length > 0 || selectedGroups.length > 0 || selectedContacts.length > 0;
+}
+
+async function saveAsTemplate() {
+  const title = prompt('Nom du template ?');
+  if (!title || !title.trim()) return;
+  const state = buildComposeState();
+  const notes = (document.getElementById('message-notes')?.value || '').trim();
+  const timezone = document.getElementById('message-timezone')?.value || userTimezone || 'Europe/Paris';
+  const payload = {
+    title: title.trim(),
+    content: state.content,
+    attachments: state.attachments,
+    tags: [...selectedTags],
+    mentions: state.mentions,
+    notes,
+    timezone,
+    type: state.poll && !state.content && !state.attachments.length ? 'poll' : (state.location ? 'location' : 'text'),
+    poll: state.poll,
+    location: state.location,
+    recurrence: getRecurrenceData(),
+  };
+  try {
+    const res = await api('/api/templates', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      toast('Template cree !', 'success');
+      loadTemplatesList();
+    } else {
+      toast(data.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 async function saveAsDraft(silent = false) {

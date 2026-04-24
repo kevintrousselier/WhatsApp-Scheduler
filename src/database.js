@@ -131,11 +131,39 @@ async function init() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
       name TEXT NOT NULL,
+      event_date TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       UNIQUE(user_id, name),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
+
+  try {
+    const tc = getAll("PRAGMA table_info('tags')");
+    if (!tc.some(c => c.name === 'event_date')) {
+      db.run("ALTER TABLE tags ADD COLUMN event_date TEXT");
+      console.log('[Database] Migrated tags: added event_date column');
+    }
+  } catch (err) { console.error('[Database] tags migration:', err.message); }
+
+  // Templates: add columns to support full message features
+  try {
+    const cols = getAll("PRAGMA table_info('templates')");
+    const addCol = (name, def) => {
+      if (!cols.some(c => c.name === name)) {
+        db.run(`ALTER TABLE templates ADD COLUMN ${name} ${def}`);
+        console.log(`[Database] Migrated templates: added ${name}`);
+      }
+    };
+    addCol('type', "TEXT DEFAULT 'text'");
+    addCol('poll_json', 'TEXT');
+    addCol('location_json', 'TEXT');
+    addCol('recurrence_json', 'TEXT');
+    addCol('mentions_json', "TEXT DEFAULT '[]'");
+    addCol('tags_json', "TEXT DEFAULT '[]'");
+    addCol('timezone', "TEXT DEFAULT 'Europe/Paris'");
+    addCol('notes', "TEXT DEFAULT ''");
+  } catch (err) { console.error('[Database] templates migration:', err.message); }
 
   // Migration: add mentions_json to messages
   try {
@@ -228,6 +256,14 @@ function parseTemplate(row) {
     ...row,
     variables: JSON.parse(row.variables_json || '[]'),
     attachments: JSON.parse(row.attachments_json || '[]'),
+    mentions: JSON.parse(row.mentions_json || '[]'),
+    tags: JSON.parse(row.tags_json || '[]'),
+    notes: row.notes || '',
+    timezone: row.timezone || 'Europe/Paris',
+    type: row.type || 'text',
+    poll: row.poll_json ? JSON.parse(row.poll_json) : null,
+    location: row.location_json ? JSON.parse(row.location_json) : null,
+    recurrence: row.recurrence_json ? JSON.parse(row.recurrence_json) : null,
   };
 }
 
@@ -380,10 +416,20 @@ module.exports = {
   },
 
   // --- Templates ---
-  createTemplate(userId, { title, content, variables = [], attachments = [] }) {
+  createTemplate(userId, { title, content, variables = [], attachments = [], mentions = [], tags = [], notes = '', timezone = 'Europe/Paris', type = 'text', poll = null, location = null, recurrence = null }) {
     const id = runInsert(
-      'INSERT INTO templates (user_id, title, content, variables_json, attachments_json) VALUES (?, ?, ?, ?, ?)',
-      [userId, title, content, JSON.stringify(variables), JSON.stringify(attachments)]
+      `INSERT INTO templates (user_id, title, content, variables_json, attachments_json, mentions_json, tags_json, notes, timezone, type, poll_json, location_json, recurrence_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        userId, title, content,
+        JSON.stringify(variables), JSON.stringify(attachments),
+        JSON.stringify(mentions || []), JSON.stringify(tags || []),
+        notes || '', timezone || 'Europe/Paris',
+        type || 'text',
+        poll ? JSON.stringify(poll) : null,
+        location ? JSON.stringify(location) : null,
+        recurrence ? JSON.stringify(recurrence) : null,
+      ]
     );
     return this.getTemplateById(id);
   },
@@ -396,10 +442,21 @@ module.exports = {
     return parseTemplate(getOne('SELECT * FROM templates WHERE id = ?', [id]));
   },
 
-  updateTemplate(id, userId, { title, content, variables = [], attachments = [] }) {
+  updateTemplate(id, userId, { title, content, variables = [], attachments = [], mentions, tags, notes, timezone, type, poll, location, recurrence }) {
+    const existing = this.getTemplateById(id);
+    if (!existing) return null;
+    const m = mentions !== undefined ? JSON.stringify(mentions || []) : existing.mentions_json;
+    const tg = tags !== undefined ? JSON.stringify(tags || []) : existing.tags_json;
+    const n = notes !== undefined ? (notes || '') : (existing.notes || '');
+    const tz = timezone || existing.timezone || 'Europe/Paris';
+    const t = type || existing.type || 'text';
+    const p = poll !== undefined ? (poll ? JSON.stringify(poll) : null) : (existing.poll ? JSON.stringify(existing.poll) : null);
+    const l = location !== undefined ? (location ? JSON.stringify(location) : null) : (existing.location ? JSON.stringify(existing.location) : null);
+    const r = recurrence !== undefined ? (recurrence ? JSON.stringify(recurrence) : null) : (existing.recurrence ? JSON.stringify(existing.recurrence) : null);
     runQuery(
-      "UPDATE templates SET title = ?, content = ?, variables_json = ?, attachments_json = ?, updated_at = datetime('now') WHERE id = ? AND user_id = ?",
-      [title, content, JSON.stringify(variables), JSON.stringify(attachments), id, userId]
+      `UPDATE templates SET title = ?, content = ?, variables_json = ?, attachments_json = ?, mentions_json = ?, tags_json = ?, notes = ?, timezone = ?, type = ?, poll_json = ?, location_json = ?, recurrence_json = ?, updated_at = datetime('now')
+       WHERE id = ? AND user_id = ?`,
+      [title, content, JSON.stringify(variables), JSON.stringify(attachments || []), m, tg, n, tz, t, p, l, r, id, userId]
     );
     return this.getTemplateById(id);
   },
@@ -411,9 +468,9 @@ module.exports = {
   },
 
   // --- Tags ---
-  createTag(userId, name) {
+  createTag(userId, name, event_date = null) {
     try {
-      const id = runInsert('INSERT INTO tags (user_id, name) VALUES (?, ?)', [userId, name]);
+      const id = runInsert('INSERT INTO tags (user_id, name, event_date) VALUES (?, ?, ?)', [userId, name, event_date || null]);
       return this.getTagById(id);
     } catch (err) {
       if (err.message.includes('UNIQUE')) {
@@ -432,9 +489,17 @@ module.exports = {
     return getAll('SELECT * FROM tags WHERE user_id = ? ORDER BY name ASC', [userId]);
   },
 
-  renameTag(id, userId, newName) {
-    runQuery('UPDATE tags SET name = ? WHERE id = ? AND user_id = ?', [newName, id, userId]);
+  updateTag(id, userId, { name, event_date }) {
+    const existing = getOne('SELECT * FROM tags WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!existing) return null;
+    const newName = name !== undefined ? name : existing.name;
+    const newDate = event_date !== undefined ? event_date : existing.event_date;
+    runQuery('UPDATE tags SET name = ?, event_date = ? WHERE id = ? AND user_id = ?', [newName, newDate || null, id, userId]);
     return this.getTagById(id);
+  },
+
+  renameTag(id, userId, newName) {
+    return this.updateTag(id, userId, { name: newName });
   },
 
   deleteTag(id, userId) {

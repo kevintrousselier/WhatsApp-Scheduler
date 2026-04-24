@@ -227,10 +227,10 @@ app.get('/api/tags', requireUser, (req, res) => {
 
 app.post('/api/tags', requireUser, (req, res) => {
   try {
-    const { name } = req.body;
+    const { name, event_date } = req.body;
     const clean = (name || '').trim().replace(/^#/, '');
     if (!clean) return res.status(400).json({ error: 'Tag name required' });
-    const tag = db.createTag(req.userId, clean);
+    const tag = db.createTag(req.userId, clean, event_date || null);
     res.status(201).json(tag);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -239,10 +239,11 @@ app.post('/api/tags', requireUser, (req, res) => {
 
 app.put('/api/tags/:id', requireUser, (req, res) => {
   try {
-    const { name } = req.body;
-    const clean = (name || '').trim().replace(/^#/, '');
-    if (!clean) return res.status(400).json({ error: 'Tag name required' });
-    const tag = db.renameTag(parseInt(req.params.id), req.userId, clean);
+    const { name, event_date } = req.body;
+    const patch = {};
+    if (name !== undefined) patch.name = (name || '').trim().replace(/^#/, '');
+    if (event_date !== undefined) patch.event_date = event_date || null;
+    const tag = db.updateTag(parseInt(req.params.id), req.userId, patch);
     if (!tag) return res.status(404).json({ error: 'Tag not found' });
     res.json(tag);
   } catch (err) {
@@ -522,9 +523,9 @@ app.get('/api/templates', requireUser, (req, res) => {
 
 app.post('/api/templates', requireUser, (req, res) => {
   try {
-    const { title, content, variables, attachments } = req.body;
-    if (!title || !content) return res.status(400).json({ error: 'Title and content required' });
-    const template = db.createTemplate(req.userId, { title, content, variables, attachments });
+    const { title, content, variables, attachments, mentions, tags, notes, timezone, type, poll, location, recurrence } = req.body;
+    if (!title) return res.status(400).json({ error: 'Title required' });
+    const template = db.createTemplate(req.userId, { title, content: content || '', variables, attachments, mentions, tags, notes, timezone, type, poll, location, recurrence });
     res.status(201).json(template);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -533,8 +534,8 @@ app.post('/api/templates', requireUser, (req, res) => {
 
 app.put('/api/templates/:id', requireUser, (req, res) => {
   try {
-    const { title, content, variables, attachments } = req.body;
-    const template = db.updateTemplate(parseInt(req.params.id), req.userId, { title, content, variables, attachments });
+    const { title, content, variables, attachments, mentions, tags, notes, timezone, type, poll, location, recurrence } = req.body;
+    const template = db.updateTemplate(parseInt(req.params.id), req.userId, { title, content, variables, attachments, mentions, tags, notes, timezone, type, poll, location, recurrence });
     if (!template) return res.status(404).json({ error: 'Template not found' });
     res.json(template);
   } catch (err) {

@@ -120,15 +120,6 @@
           </div>
 
           <div class="form-group">
-            <label>Type de message</label>
-            <div class="mode-toggle">
-              <button type="button" class="btn btn-sm active" id="msgtype-text" onclick="setMessageType('text')">Texte</button>
-              <button type="button" class="btn btn-sm" id="msgtype-poll" onclick="setMessageType('poll')">Sondage</button>
-              <button type="button" class="btn btn-sm" id="msgtype-location" onclick="setMessageType('location')">Localisation</button>
-            </div>
-          </div>
-
-          <div class="form-group" id="group-mode">
             <label>Mode</label>
             <div class="mode-toggle">
               <button type="button" class="btn btn-sm active" id="mode-free" onclick="setMode('free')">Saisie libre</button>
@@ -143,30 +134,7 @@
             </select>
           </div>
 
-          <!-- Poll form -->
-          <div class="form-group hidden" id="poll-form">
-            <label>Question du sondage</label>
-            <input type="text" id="poll-question" class="input" placeholder="Ex: Quand etes-vous disponibles ?">
-            <label style="margin-top:10px;display:block">Options (2 a 12)</label>
-            <div id="poll-options"></div>
-            <button type="button" class="btn btn-xs" style="margin-top:6px" onclick="addPollOption()">+ Ajouter une option</button>
-            <label style="margin-top:10px;display:flex;align-items:center;gap:6px;text-transform:none">
-              <input type="checkbox" id="poll-multi"> Autoriser plusieurs reponses
-            </label>
-          </div>
-
-          <!-- Location form -->
-          <div class="form-group hidden" id="location-form">
-            <label>Lieu</label>
-            <div style="display:flex;gap:8px;margin-bottom:6px">
-              <input type="text" id="location-search" class="input" placeholder="Rechercher une adresse ou cliquez sur la carte">
-              <button type="button" class="btn btn-sm" onclick="searchLocation()">Chercher</button>
-            </div>
-            <div id="location-map" style="width:100%;height:320px;border-radius:8px;background:#eee"></div>
-            <div id="location-info" style="margin-top:8px;font-size:13px;color:var(--text-light)"></div>
-            <input type="text" id="location-description" class="input" placeholder="Description (ex: Rendez-vous parking)" style="margin-top:8px">
-          </div>
-
+          <!-- Text editor (always visible) -->
           <div class="form-group" id="text-form">
             <label>Message</label>
             <div class="format-toolbar" data-target="message-content">
@@ -192,24 +160,76 @@
             </div>
           </div>
 
-          <div class="form-group" id="attachments-form-group">
-            <label>Pieces jointes</label>
-            <div id="drop-zone" class="drop-zone">
-              <p>Glissez vos fichiers ici ou <label for="file-input" class="link">parcourir</label></p>
-              <input type="file" id="file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4">
-              <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
-            </div>
-            <div style="margin-top:8px">
-              <button type="button" id="btn-record-audio" class="btn btn-sm" onclick="toggleAudioRecording()">&#127908; Enregistrer un message audio</button>
+          <!-- Add-ons toolbar -->
+          <div class="form-group">
+            <label>Ajouter au message</label>
+            <div class="addon-toolbar">
+              <button type="button" class="btn btn-sm" onclick="addAddon('attachments')">&#128206; Fichier</button>
+              <button type="button" class="btn btn-sm" onclick="toggleAudioRecording()" id="btn-record-audio">&#127908; Audio</button>
+              <button type="button" class="btn btn-sm" onclick="addAddon('poll')">&#128202; Sondage</button>
+              <button type="button" class="btn btn-sm" onclick="addAddon('location')">&#128205; Localisation</button>
               <span id="audio-rec-status" style="font-size:12px;color:var(--text-light);margin-left:8px"></span>
             </div>
+            <input type="file" id="file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4">
+          </div>
+
+          <!-- Add-on : Attachments block (visible si fichiers ajoutes) -->
+          <div class="addon-block hidden" id="addon-attachments">
+            <div class="addon-header">
+              <span>&#128206; Pieces jointes</span>
+              <button type="button" class="addon-remove" onclick="removeAddon('attachments')" title="Retirer">&times;</button>
+            </div>
+            <div id="drop-zone" class="drop-zone">
+              <p>Glissez vos fichiers ici ou <label for="file-input" class="link">parcourir</label></p>
+              <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
+            </div>
             <div id="file-list" class="file-list"></div>
+          </div>
+
+          <!-- Add-on : Poll block -->
+          <div class="addon-block hidden" id="addon-poll">
+            <div class="addon-header">
+              <span>&#128202; Sondage</span>
+              <button type="button" class="addon-remove" onclick="removeAddon('poll')" title="Retirer">&times;</button>
+            </div>
+            <input type="text" id="poll-question" class="input" placeholder="Question du sondage (ex: Quand etes-vous disponibles ?)">
+            <label style="margin-top:10px;display:block;font-size:11px;color:var(--text-light);text-transform:uppercase">Options (2 a 12)</label>
+            <div id="poll-options"></div>
+            <button type="button" class="btn btn-xs" style="margin-top:6px" onclick="addPollOption()">+ Ajouter une option</button>
+            <label style="margin-top:10px;display:flex;align-items:center;gap:6px;text-transform:none">
+              <input type="checkbox" id="poll-multi"> Autoriser plusieurs reponses
+            </label>
+            <p class="hint" style="margin-top:8px">Un sondage est envoye en message separe du texte (limitation WhatsApp).</p>
+          </div>
+
+          <!-- Add-on : Location block -->
+          <div class="addon-block hidden" id="addon-location">
+            <div class="addon-header">
+              <span>&#128205; Localisation</span>
+              <button type="button" class="addon-remove" onclick="removeAddon('location')" title="Retirer">&times;</button>
+            </div>
+            <div style="display:flex;gap:8px;margin-bottom:6px">
+              <input type="text" id="location-search" class="input" placeholder="Rechercher une adresse">
+              <button type="button" class="btn btn-sm" onclick="searchLocation()">Chercher</button>
+            </div>
+            <div id="location-map" style="width:100%;height:320px;border-radius:8px;background:#eee"></div>
+            <div id="location-info" style="margin-top:8px;font-size:13px;color:var(--text-light)"></div>
+            <input type="text" id="location-description" class="input" placeholder="Description (ex: Rendez-vous parking)" style="margin-top:8px">
+            <label style="margin-top:10px;display:flex;align-items:center;gap:6px;text-transform:none">
+              <input type="checkbox" id="location-insert-link" checked> Inserer le lien Google Maps dans le texte du message
+            </label>
           </div>
 
           <div class="form-group">
             <label>Tags (optionnel)</label>
             <div id="tags-selector" class="tags-selector"></div>
             <div style="margin-top:6px"><button class="btn btn-xs" onclick="showSettings()">+ Gerer les tags</button></div>
+          </div>
+
+          <!-- Quick schedule relative to tag event dates -->
+          <div class="form-group hidden" id="quick-schedule-block">
+            <label>Programmer par rapport a un evenement</label>
+            <div id="quick-schedule-events"></div>
           </div>
 
           <div class="form-group">
@@ -222,40 +242,42 @@
             <select id="message-timezone" class="input" style="max-width:320px"></select>
           </div>
 
-          <!-- Recurrence -->
+          <!-- Recurrence (Mode A + Mode B unified) -->
           <div class="form-group">
             <label style="display:flex;align-items:center;gap:6px;text-transform:none">
               <input type="checkbox" id="enable-recurrence" onchange="toggleRecurrence()"> Repeter ce message automatiquement
             </label>
-            <div id="recurrence-form" class="hidden" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px">
-              <span style="font-size:13px">Tous les</span>
-              <input type="number" id="recurrence-interval" class="input input-sm" min="1" value="1" style="width:60px">
-              <select id="recurrence-frequency" class="input input-sm">
-                <option value="daily">jour(s)</option>
-                <option value="weekly" selected>semaine(s)</option>
-                <option value="monthly">mois</option>
-              </select>
-              <span style="font-size:13px">jusqu'au</span>
-              <input type="date" id="recurrence-enddate" class="input input-sm">
-            </div>
-          </div>
-
-          <!-- Batch J-X -->
-          <div class="form-group">
-            <label style="display:flex;align-items:center;gap:6px;text-transform:none">
-              <input type="checkbox" id="enable-batch" onchange="toggleBatch()"> Planification batch (plusieurs rappels)
-            </label>
-            <div id="batch-form" class="hidden" style="margin-top:8px">
-              <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-                <span style="font-size:13px">Date/heure de reference :</span>
-                <input type="datetime-local" id="batch-reference" class="input input-sm">
+            <div id="recurrence-form" class="hidden" style="margin-top:10px">
+              <div style="margin-bottom:10px">
+                <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:500">
+                  <input type="radio" name="recurrence-mode" value="regular" checked onchange="updateRecurrenceMode()"> Mode regulier (tous les X jours/semaines/mois)
+                </label>
+                <div id="recurrence-regular" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px;margin-left:22px">
+                  <span style="font-size:13px">Tous les</span>
+                  <input type="number" id="recurrence-interval" class="input input-sm" min="1" value="1" style="width:60px">
+                  <select id="recurrence-frequency" class="input input-sm">
+                    <option value="daily">jour(s)</option>
+                    <option value="weekly" selected>semaine(s)</option>
+                    <option value="monthly">mois</option>
+                  </select>
+                  <span style="font-size:13px">jusqu'au</span>
+                  <input type="date" id="recurrence-enddate" class="input input-sm">
+                </div>
               </div>
-              <div style="font-size:12px;color:var(--text-light);margin-bottom:6px">Rappels a envoyer :</div>
-              <label style="display:flex;gap:6px;align-items:center;text-transform:none"><input type="checkbox" class="batch-offset" value="-14" data-time="09:00"> J-14 a 09:00</label>
-              <label style="display:flex;gap:6px;align-items:center;text-transform:none"><input type="checkbox" class="batch-offset" value="-7" data-time="09:00"> J-7 a 09:00</label>
-              <label style="display:flex;gap:6px;align-items:center;text-transform:none"><input type="checkbox" class="batch-offset" value="-3" data-time="09:00"> J-3 a 09:00</label>
-              <label style="display:flex;gap:6px;align-items:center;text-transform:none"><input type="checkbox" class="batch-offset" value="-1" data-time="18:00"> J-1 a 18:00</label>
-              <label style="display:flex;gap:6px;align-items:center;text-transform:none"><input type="checkbox" class="batch-offset" value="0"> Jour J a l'heure de reference</label>
+              <div>
+                <label style="display:flex;align-items:center;gap:6px;text-transform:none;font-weight:500">
+                  <input type="radio" name="recurrence-mode" value="custom" onchange="updateRecurrenceMode()"> Envois multiples a des decalages libres (relatifs a une date)
+                </label>
+                <div id="recurrence-custom" class="hidden" style="margin-top:6px;margin-left:22px">
+                  <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+                    <span style="font-size:13px">Date de reference :</span>
+                    <input type="datetime-local" id="batch-reference" class="input input-sm">
+                  </div>
+                  <div id="batch-offsets-list" style="display:flex;flex-direction:column;gap:4px"></div>
+                  <button type="button" class="btn btn-xs" style="margin-top:6px" onclick="addBatchOffset()">+ Ajouter un decalage</button>
+                  <p class="hint" style="margin-top:6px">Chaque decalage produit un message programme independant.</p>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -270,6 +292,7 @@
               </div>
               <span class="or">ou</span>
               <button class="btn" onclick="saveAsDraft()">Enregistrer brouillon</button>
+              <button class="btn" onclick="saveAsTemplate()">Enregistrer comme template</button>
             </div>
           </div>
         </section>
@@ -433,10 +456,11 @@
           <div class="card">
             <h3>Gestion des tags</h3>
             <p style="font-size:13px;color:var(--text-light);margin-bottom:14px">
-              Creez vos tags predefinis. Ils seront disponibles dans le selecteur du formulaire Nouveau message.
+              Creez vos tags predefinis. Associez-leur une date d'evenement (optionnel) pour pouvoir programmer des messages en J-X depuis le formulaire d'envoi.
             </p>
-            <div class="add-profile" style="margin-bottom:14px">
-              <input type="text" id="new-tag-name" class="input" placeholder="Nom du tag (ex: Corse2026)" style="max-width:260px">
+            <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+              <input type="text" id="new-tag-name" class="input" placeholder="Nom du tag (ex: Corse2026)" style="max-width:220px">
+              <input type="datetime-local" id="new-tag-date" class="input" style="max-width:220px">
               <button class="btn btn-primary" onclick="createTag()">Ajouter</button>
             </div>
             <div id="tags-list" class="tags-list"></div>
