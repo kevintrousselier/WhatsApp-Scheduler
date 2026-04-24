@@ -59,9 +59,17 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
       for (let i = 0; i < message.attachments.length; i++) {
         const attachment = message.attachments[i];
         const filePath = path.join(__dirname, '..', 'data', 'uploads', String(message.user_id), attachment.filename);
-        const isAudioVoice = attachment.voice === true;
+        const ext = String(attachment.filename || '').toLowerCase().split('.').pop();
+        const isAudioExt = ['ogg', 'opus', 'mp3', 'm4a', 'aac', 'wav'].includes(ext);
+        const isAudioVoice = attachment.voice === true || isAudioExt;
         if (isAudioVoice) {
+          // Send as WhatsApp voice note
           await waClient.sendAudio(group.id, filePath, true);
+          // If there is text, send it separately
+          if (i === 0 && content) {
+            await sleep(1000);
+            await waClient.sendMessage(group.id, content, mentionsOpt);
+          }
         } else {
           const caption = i === 0 ? content : '';
           const opts = i === 0 ? mentionsOpt : {};

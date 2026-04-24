@@ -1,4 +1,0 @@
-34-71-38-196.nip.io {
-  reverse_proxy whatsapp-scheduler:3000
-  encode gzip
-}

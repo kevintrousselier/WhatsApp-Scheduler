@@ -172,12 +172,12 @@
             <label>Ajouter au message</label>
             <div class="addon-toolbar">
               <button type="button" class="btn btn-sm" onclick="addAddon('attachments')">&#128206; Fichier</button>
-              <button type="button" class="btn btn-sm" onclick="toggleAudioRecording()" id="btn-record-audio">&#127908; Audio</button>
+              <button type="button" class="btn btn-sm" onclick="tryRecordAudio()" id="btn-record-audio" title="Necessite HTTPS. Vous pouvez aussi uploader un fichier audio via 'Fichier'">&#127908; Audio</button>
               <button type="button" class="btn btn-sm" onclick="addAddon('poll')">&#128202; Sondage</button>
               <button type="button" class="btn btn-sm" onclick="addAddon('location')">&#128205; Localisation</button>
               <span id="audio-rec-status" style="font-size:12px;color:var(--text-light);margin-left:8px"></span>
             </div>
-            <input type="file" id="file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4">
+            <input type="file" id="file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4,.mp3,.ogg,.m4a,.wav,.aac">
           </div>
 
           <!-- Add-on : Attachments block (visible si fichiers ajoutes) -->
@@ -188,7 +188,7 @@
             </div>
             <div id="drop-zone" class="drop-zone">
               <p>Glissez vos fichiers ici ou <label for="file-input" class="link">parcourir</label></p>
-              <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
+              <p class="hint">PDF, images (JPG/PNG), videos (MP4), audio (MP3/OGG/M4A/WAV) — max 16 Mo/fichier</p>
             </div>
             <div id="file-list" class="file-list"></div>
           </div>

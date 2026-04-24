@@ -1206,6 +1206,17 @@ function resetLocationForm() {
 // ==============================
 //  AUDIO RECORDING (webm -> server-side opus)
 // ==============================
+function tryRecordAudio() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('Enregistrement micro indisponible en HTTP. Uploadez un fichier audio (MP3/OGG/M4A/WAV) via "Fichier".', 'info');
+    // Open attachments panel to help
+    addAddon('attachments');
+    setTimeout(() => document.getElementById('file-input')?.click(), 200);
+    return;
+  }
+  toggleAudioRecording();
+}
+
 async function toggleAudioRecording() {
   const btn = document.getElementById('btn-record-audio');
   const status = document.getElementById('audio-rec-status');
@@ -1214,7 +1225,6 @@ async function toggleAudioRecording() {
     return;
   }
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    toast('Enregistrement audio impossible en HTTP. HTTPS requis (domaine + SSL).', 'error');
     return;
   }
   try {
