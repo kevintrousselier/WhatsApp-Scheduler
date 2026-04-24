@@ -1,8 +1,8 @@
 services:
   whatsapp-scheduler:
     build: .
-    ports:
-      - "3000:3000"
+    expose:
+      - "3000"
     volumes:
       - ./data:/app/data
     env_file:
@@ -21,3 +21,23 @@ services:
       timeout: 10s
       retries: 3
       start_period: 90s
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      - TZ=Europe/Paris
+    restart: unless-stopped
+    depends_on:
+      - whatsapp-scheduler
+
+volumes:
+  caddy-data:
+  caddy-config:
