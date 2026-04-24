@@ -606,10 +606,20 @@ function initKeyboardShortcuts() {
       return;
     }
 
-    // Ctrl+B/I inside textareas -> apply formatting
-    if ((e.ctrlKey || e.metaKey) && inTextarea && (active.id === 'message-content' || active.id === 'tpl-content')) {
-      if (e.key.toLowerCase() === 'b') { e.preventDefault(); wrapSelection(active, '*'); }
-      else if (e.key.toLowerCase() === 'i') { e.preventDefault(); wrapSelection(active, '_'); }
+    // Ctrl+B/I inside message area or template textarea -> WhatsApp markers
+    const isEditableTarget = active && (
+      active.id === 'tpl-content' ||
+      (active.id === 'message-content' && active.classList.contains('contenteditable'))
+    );
+    if ((e.ctrlKey || e.metaKey) && isEditableTarget) {
+      const key = e.key.toLowerCase();
+      if (key === 'b' || key === 'i') {
+        e.preventDefault();
+        e.stopPropagation();
+        const wrap = key === 'b' ? '*' : '_';
+        if (active.classList.contains('contenteditable')) wrapSelectionCE(wrap);
+        else wrapSelection(active, wrap);
+      }
     }
 
     // "/" focuses group search if not typing
