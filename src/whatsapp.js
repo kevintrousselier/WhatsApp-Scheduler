@@ -214,7 +214,13 @@ class WhatsAppClient extends EventEmitter {
   async sendLocation(recipientId, { latitude, longitude, description }) {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
     this.touchActivity();
-    const loc = new Location(latitude, longitude, description || '');
+    const lat = Number(latitude);
+    const lng = Number(longitude);
+    if (isNaN(lat) || isNaN(lng)) throw new Error(`Invalid coordinates: ${latitude}, ${longitude}`);
+    const name = (description || '').trim() || 'Localisation';
+    // Use explicit options form (newer whatsapp-web.js API)
+    const loc = new Location(lat, lng, { name, address: name });
+    console.log(`[WhatsApp:${this.userId}] sendLocation to ${recipientId}: ${lat}, ${lng} — ${name}`);
     return this.client.sendMessage(recipientId, loc);
   }
 

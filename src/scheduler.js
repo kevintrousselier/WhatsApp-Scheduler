@@ -28,12 +28,20 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
     const type = message.type || 'text';
 
     if (type === 'poll' && message.poll) {
-      // If there is also text, send text FIRST then poll
       if (content) await waClient.sendMessage(group.id, content, mentionsOpt);
       await waClient.sendPoll(group.id, message.poll);
-    } else if (type === 'location' && message.location) {
+    } else if (type === 'location') {
+      if (!message.location) {
+        throw new Error('Location data is missing');
+      }
+      console.log(`[Scheduler] Sending location to ${group.name}:`, JSON.stringify(message.location));
       await waClient.sendLocation(group.id, message.location);
-      if (content) await waClient.sendMessage(group.id, content, mentionsOpt);
+      // Content already contains the Maps link (inserted at compose time) if the checkbox was on.
+      // If there is content, send it as a follow-up text message.
+      if (content) {
+        await sleep(1000);
+        await waClient.sendMessage(group.id, content, mentionsOpt);
+      }
     } else if (message.poll && (hasAttachments || content)) {
       // Text/attachments + poll as add-on: send text/attachments first, then poll
       if (hasAttachments) {
