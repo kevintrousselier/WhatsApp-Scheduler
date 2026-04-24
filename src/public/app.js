@@ -786,11 +786,13 @@ function detectMentionAtCaret() {
   const node = range.startContainer;
   if (node.nodeType !== Node.TEXT_NODE) return hideMentionDropdown();
   const text = node.textContent.slice(0, range.startOffset);
-  const m = text.match(/@([\w-]*)$/);
+  // Allow letters, digits, accents, hyphens, apostrophes, spaces — but stop at punctuation
+  // Up to 40 chars after @, can contain spaces (for "Jean-Pierre Dupont")
+  const m = text.match(/@([^\n,.!?:;@]{0,40})$/);
   if (!m) return hideMentionDropdown();
   mentionAnchorNode = node;
   mentionStartOffset = range.startOffset - m[0].length;
-  mentionCurrentText = m[1].toLowerCase();
+  mentionCurrentText = m[1].toLowerCase().trim();
   openMentionDropdown();
 }
 
@@ -814,11 +816,14 @@ async function openMentionDropdown() {
   // Dedupe by id
   const seen = new Set();
   const unique = all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
-  // Filter by current text
-  mentionParticipants = unique.filter(p =>
-    (p.name || '').toLowerCase().includes(mentionCurrentText) ||
-    (p.number || '').includes(mentionCurrentText)
-  ).slice(0, 20);
+  // Filter by current text (match all words in order)
+  const q = mentionCurrentText.toLowerCase();
+  const words = q.split(/\s+/).filter(w => w.length > 0);
+  mentionParticipants = unique.filter(p => {
+    const haystack = ((p.name || '') + ' ' + (p.number || '')).toLowerCase();
+    if (!q) return true;
+    return words.every(w => haystack.includes(w));
+  }).slice(0, 20);
   mentionActiveIdx = 0;
   renderMentionDropdown();
 }
