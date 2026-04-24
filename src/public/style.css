@@ -940,6 +940,22 @@ emoji-picker {
   background: var(--bg);
 }
 
+/* Google Places autocomplete */
+.pac-container {
+  z-index: 10001 !important;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  font-family: inherit;
+}
+.pac-item {
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pac-item:hover {
+  background: var(--bg);
+}
+
 /* Add-on blocks */
 .addon-toolbar {
   display: flex;

@@ -1120,13 +1120,39 @@ function initLocationMap() {
     setLocationMarker(e.latLng.lat(), e.latLng.lng());
   });
 
+  // Google Places Autocomplete on the search input
+  const searchInput = document.getElementById('location-search');
+  if (searchInput && google.maps.places && google.maps.places.Autocomplete) {
+    if (!searchInput.dataset.autocompleteInit) {
+      const ac = new google.maps.places.Autocomplete(searchInput, {
+        fields: ['geometry', 'formatted_address', 'name'],
+      });
+      ac.bindTo('bounds', locationMap);
+      ac.addListener('place_changed', () => {
+        const place = ac.getPlace();
+        if (!place.geometry || !place.geometry.location) return;
+        const lat = place.geometry.location.lat();
+        const lng = place.geometry.location.lng();
+        locationMap.setCenter({ lat, lng });
+        locationMap.setZoom(15);
+        setLocationMarker(lat, lng, false);
+        const label = place.name && place.formatted_address && !place.formatted_address.startsWith(place.name)
+          ? `${place.name} — ${place.formatted_address}`
+          : place.formatted_address || place.name || '';
+        document.getElementById('location-info').textContent = `${label} (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+        const descInput = document.getElementById('location-description');
+        if (descInput && !descInput.value) descInput.value = label;
+      });
+      searchInput.dataset.autocompleteInit = '1';
+    }
+  }
+
   if (currentLocation) {
     setLocationMarker(currentLocation.latitude, currentLocation.longitude, false);
     locationMap.setCenter({ lat: currentLocation.latitude, lng: currentLocation.longitude });
     locationMap.setZoom(15);
   }
 
-  // Force map to resize after container is visible
   setTimeout(() => { if (locationMap && google.maps.event) google.maps.event.trigger(locationMap, 'resize'); }, 200);
 }
 
