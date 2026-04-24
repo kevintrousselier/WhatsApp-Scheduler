@@ -19,19 +19,24 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
   try {
     const hasAttachments = message.attachments && message.attachments.length > 0;
     const content = message.content || '';
+    // Mentions are only valid for group chats
+    const isGroup = (group.id || '').endsWith('@g.us');
+    const mentionsOpt = (isGroup && Array.isArray(message.mentions) && message.mentions.length > 0)
+      ? { mentions: message.mentions }
+      : {};
 
     if (hasAttachments) {
-      // Send first attachment with caption = content; remaining attachments without caption
       for (let i = 0; i < message.attachments.length; i++) {
         const attachment = message.attachments[i];
         const filePath = path.join(__dirname, '..', 'data', 'uploads', String(message.user_id), attachment.filename);
         const caption = i === 0 ? content : '';
-        await waClient.sendMedia(group.id, filePath, caption);
+        // Mentions go with the caption (first attachment)
+        const opts = i === 0 ? mentionsOpt : {};
+        await waClient.sendMedia(group.id, filePath, caption, opts);
         if (i < message.attachments.length - 1) await sleep(2000);
       }
     } else if (content) {
-      // No attachments: send plain text
-      await waClient.sendMessage(group.id, content);
+      await waClient.sendMessage(group.id, content, mentionsOpt);
     }
 
     db.logSend({

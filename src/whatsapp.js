@@ -139,19 +139,47 @@ class WhatsAppClient extends EventEmitter {
   getContacts() { return this.contacts; }
   getStatus() { return { status: this.status, qrCode: this.qrCode }; }
 
-  async sendMessage(recipientId, text) {
+  async getGroupParticipants(groupId) {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
     this.touchActivity();
-    return this.client.sendMessage(recipientId, text);
+    try {
+      const chat = await this.client.getChatById(groupId);
+      if (!chat.isGroup) return [];
+      const participants = chat.groupMetadata?.participants || [];
+      const results = [];
+      for (const p of participants) {
+        let name = '';
+        try {
+          const contact = await this.client.getContactById(p.id._serialized);
+          name = contact.name || contact.pushname || contact.number || '';
+        } catch (_) {}
+        results.push({
+          id: p.id._serialized,
+          number: p.id.user,
+          name: name || p.id.user,
+          isAdmin: !!p.isAdmin,
+        });
+      }
+      return results;
+    } catch (err) {
+      console.error(`[WhatsApp:${this.userId}] getGroupParticipants error:`, err.message);
+      return [];
+    }
   }
 
-  async sendMedia(recipientId, filePath, caption = '') {
+  async sendMessage(recipientId, text, options = {}) {
+    if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
+    this.touchActivity();
+    return this.client.sendMessage(recipientId, text, options);
+  }
+
+  async sendMedia(recipientId, filePath, caption = '', options = {}) {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
     this.touchActivity();
     const absolutePath = path.resolve(filePath);
     if (!fs.existsSync(absolutePath)) throw new Error(`File not found: ${absolutePath}`);
     const media = MessageMedia.fromFilePath(absolutePath);
-    return this.client.sendMessage(recipientId, media, { caption });
+    return this.client.sendMessage(recipientId, media, { caption, ...options });
   }
 
   _cleanLocks(dir) {

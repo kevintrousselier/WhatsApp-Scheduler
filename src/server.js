@@ -172,6 +172,57 @@ app.get('/api/contacts', requireUser, (req, res) => {
   res.json(client ? client.getContacts() : []);
 });
 
+// Group participants (for @mentions)
+app.get('/api/groups/:groupId/participants', requireUser, async (req, res) => {
+  const client = waManager.getClient(req.userId);
+  if (!client || client.getStatus().status !== 'ready') {
+    return res.status(400).json({ error: 'WhatsApp client not ready' });
+  }
+  try {
+    const participants = await client.getGroupParticipants(req.params.groupId);
+    res.json(participants);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Tags ---
+app.get('/api/tags', requireUser, (req, res) => {
+  db.ensureTagsMigrated(req.userId);
+  res.json(db.getAllTags(req.userId));
+});
+
+app.post('/api/tags', requireUser, (req, res) => {
+  try {
+    const { name } = req.body;
+    const clean = (name || '').trim().replace(/^#/, '');
+    if (!clean) return res.status(400).json({ error: 'Tag name required' });
+    const tag = db.createTag(req.userId, clean);
+    res.status(201).json(tag);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/tags/:id', requireUser, (req, res) => {
+  try {
+    const { name } = req.body;
+    const clean = (name || '').trim().replace(/^#/, '');
+    if (!clean) return res.status(400).json({ error: 'Tag name required' });
+    const tag = db.renameTag(parseInt(req.params.id), req.userId, clean);
+    if (!tag) return res.status(404).json({ error: 'Tag not found' });
+    res.json(tag);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/tags/:id', requireUser, (req, res) => {
+  const r = db.deleteTag(parseInt(req.params.id), req.userId);
+  if (r.changes === 0) return res.status(404).json({ error: 'Tag not found' });
+  res.json({ success: true });
+});
+
 // Force refresh of groups and contacts from WhatsApp
 app.post('/api/refresh', requireUser, async (req, res) => {
   const client = waManager.getClient(req.userId);
@@ -194,7 +245,7 @@ app.post('/api/refresh', requireUser, async (req, res) => {
 // --- Messages ---
 app.post('/api/messages', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, send_now, notes, tags } = req.body;
+    const { groups, content, attachments, scheduled_at, send_now, notes, tags, mentions } = req.body;
     if (!groups || !groups.length) return res.status(400).json({ error: 'At least one recipient required' });
     if (!content && (!attachments || !attachments.length)) return res.status(400).json({ error: 'Content or attachments required' });
 
@@ -204,6 +255,7 @@ app.post('/api/messages', requireUser, (req, res) => {
       status: 'pending',
       notes: notes || '',
       tags: tags || [],
+      mentions: mentions || [],
     });
 
     if (send_now) {
@@ -227,8 +279,8 @@ app.get('/api/messages/:id', requireUser, (req, res) => {
 
 app.put('/api/messages/:id', requireUser, (req, res) => {
   try {
-    const { groups, content, attachments, scheduled_at, notes, tags } = req.body;
-    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags });
+    const { groups, content, attachments, scheduled_at, notes, tags, mentions } = req.body;
+    const message = db.updateMessage(parseInt(req.params.id), req.userId, { groups, content, attachments, scheduled_at, notes, tags, mentions });
     if (!message) return res.status(404).json({ error: 'Message not found or already sent' });
     res.json(message);
   } catch (err) {
@@ -250,7 +302,7 @@ app.post('/api/messages/:id/send', requireUser, async (req, res) => {
     db.updateMessage(message.id, req.userId, {
       groups: message.groups, content: message.content,
       attachments: message.attachments, scheduled_at: localNow(),
-      notes: message.notes, tags: message.tags,
+      notes: message.notes, tags: message.tags, mentions: message.mentions,
     });
     scheduler.processDueMessages().catch(console.error);
     res.json({ success: true });

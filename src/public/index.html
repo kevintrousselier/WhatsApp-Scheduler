@@ -30,6 +30,7 @@
       <div class="header-right">
         <span id="wa-status" class="status-badge disconnected" title="Statut WhatsApp">Deconnecte</span>
         <button id="btn-reconnect" class="btn-icon hidden" onclick="reconnectWhatsApp()" title="Reconnecter WhatsApp" aria-label="Reconnecter">&#8635;</button>
+        <button id="btn-settings" class="btn-icon hidden" onclick="showSettings()" title="Parametres" aria-label="Parametres">&#9881;</button>
         <button id="btn-switch-profile" class="btn-icon hidden" onclick="switchProfile()" title="Changer de profil" aria-label="Changer de profil">&#128100;</button>
       </div>
     </header>
@@ -141,8 +142,8 @@
               <button type="button" class="fmt-btn fmt-emoji" onclick="toggleEmojiPicker('message-content', this)" title="Emojis">&#128578;</button>
             </div>
             <div class="textarea-wrapper">
-              <textarea id="message-content" class="textarea" rows="6"
-                placeholder="Votre message..."></textarea>
+              <div id="message-content" class="textarea contenteditable" contenteditable="true" data-placeholder="Votre message... (tapez @ pour mentionner)"></div>
+              <div id="mention-dropdown" class="mention-dropdown hidden"></div>
             </div>
             <div class="message-preview-toggle">
               <button class="btn btn-xs" onclick="togglePreview()">Apercu</button>
@@ -162,7 +163,8 @@
 
           <div class="form-group">
             <label>Tags (optionnel)</label>
-            <input type="text" id="message-tags" class="input" placeholder="#Corse2026 #Briefing (separes par espace)">
+            <div id="tags-selector" class="tags-selector"></div>
+            <div style="margin-top:6px"><button class="btn btn-xs" onclick="showSettings()">+ Gerer les tags</button></div>
           </div>
 
           <div class="form-group">
@@ -186,6 +188,29 @@
         <!-- Section: Queue -->
         <section id="section-queue" class="section hidden">
           <h2>File d'attente</h2>
+
+          <div class="filter-panel">
+            <div class="filter-row">
+              <label>Recherche</label>
+              <input type="text" id="queue-filter-text" class="input input-sm" placeholder="Dans le contenu..." oninput="renderQueueFiltered()">
+            </div>
+            <div class="filter-row">
+              <label>Tags</label>
+              <div id="queue-filter-tags" class="filter-tags-chips"></div>
+            </div>
+            <div class="filter-row">
+              <label>Destinataire</label>
+              <input type="text" id="queue-filter-recipient" class="input input-sm" placeholder="Nom de groupe/contact..." oninput="renderQueueFiltered()">
+            </div>
+            <div class="filter-row">
+              <label>Du</label>
+              <input type="date" id="queue-filter-from" class="input input-sm" onchange="renderQueueFiltered()">
+              <label>Au</label>
+              <input type="date" id="queue-filter-to" class="input input-sm" onchange="renderQueueFiltered()">
+              <button class="btn btn-xs" onclick="resetQueueFilters()">Reinitialiser</button>
+            </div>
+          </div>
+
           <div id="queue-list" class="queue-list">
             <p class="empty">Aucun message programme.</p>
           </div>
@@ -246,16 +271,32 @@
             <button class="btn btn-secondary" onclick="exportCSV()">Exporter CSV</button>
           </div>
 
-          <div class="filters">
-            <input type="text" id="filter-group" class="input input-sm" placeholder="Filtrer par groupe">
-            <select id="filter-status" class="input input-sm">
-              <option value="">Tous les statuts</option>
-              <option value="sent">Envoyes</option>
-              <option value="error">Erreurs</option>
-            </select>
-            <input type="date" id="filter-from" class="input input-sm">
-            <input type="date" id="filter-to" class="input input-sm">
-            <button class="btn btn-sm" onclick="loadHistory()">Filtrer</button>
+          <div class="filter-panel">
+            <div class="filter-row">
+              <label>Recherche</label>
+              <input type="text" id="history-filter-text" class="input input-sm" placeholder="Dans le contenu..." oninput="renderHistoryFiltered()">
+            </div>
+            <div class="filter-row">
+              <label>Tags</label>
+              <div id="history-filter-tags" class="filter-tags-chips"></div>
+            </div>
+            <div class="filter-row">
+              <label>Destinataire</label>
+              <input type="text" id="filter-group" class="input input-sm" placeholder="Nom de groupe/contact..." oninput="renderHistoryFiltered()">
+              <label>Statut</label>
+              <select id="filter-status" class="input input-sm" onchange="renderHistoryFiltered()">
+                <option value="">Tous</option>
+                <option value="sent">Envoyes</option>
+                <option value="error">Erreurs</option>
+              </select>
+            </div>
+            <div class="filter-row">
+              <label>Du</label>
+              <input type="date" id="filter-from" class="input input-sm" onchange="renderHistoryFiltered()">
+              <label>Au</label>
+              <input type="date" id="filter-to" class="input input-sm" onchange="renderHistoryFiltered()">
+              <button class="btn btn-xs" onclick="resetHistoryFilters()">Reinitialiser</button>
+            </div>
           </div>
 
           <table class="table" id="history-table">
@@ -271,6 +312,23 @@
             </thead>
             <tbody id="history-body"></tbody>
           </table>
+        </section>
+
+        <!-- Section: Settings -->
+        <section id="section-settings" class="section hidden">
+          <h2>Parametres</h2>
+
+          <div class="card">
+            <h3>Gestion des tags</h3>
+            <p style="font-size:13px;color:var(--text-light);margin-bottom:14px">
+              Creez vos tags predefinis. Ils seront disponibles dans le selecteur du formulaire Nouveau message.
+            </p>
+            <div class="add-profile" style="margin-bottom:14px">
+              <input type="text" id="new-tag-name" class="input" placeholder="Nom du tag (ex: Corse2026)" style="max-width:260px">
+              <button class="btn btn-primary" onclick="createTag()">Ajouter</button>
+            </div>
+            <div id="tags-list" class="tags-list"></div>
+          </div>
         </section>
       </main>
     </div>

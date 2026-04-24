@@ -10,6 +10,10 @@ let currentMode = 'free';
 let editingMessageId = null;
 let evtSource = null;
 let tplAttachments = [];
+let availableTags = [];
+let selectedTags = [];
+let participantsCache = {};
+let filterState = { queue: {}, history: {} };
 
 // --- Init ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -17,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initDropZone();
   initFormatToolbars();
   initKeyboardShortcuts();
+  initComposeEditor();
 
   // Check if user was previously selected
   const savedUserId = sessionStorage.getItem('userId');
@@ -53,6 +58,8 @@ function showProfilesScreen() {
   document.getElementById('current-user').classList.add('hidden');
   document.getElementById('wa-status').classList.add('hidden');
   document.getElementById('btn-reconnect').classList.add('hidden');
+  const btnSettings = document.getElementById('btn-settings');
+  if (btnSettings) btnSettings.classList.add('hidden');
   loadProfiles();
 }
 
@@ -136,6 +143,7 @@ async function selectProfile(userId, silent = false) {
   document.getElementById('current-user').classList.remove('hidden');
   document.getElementById('wa-status').classList.remove('hidden');
   document.getElementById('btn-reconnect').classList.remove('hidden');
+  document.getElementById('btn-settings').classList.remove('hidden');
 
   // Fetch user info
   try {
@@ -165,6 +173,7 @@ async function selectProfile(userId, silent = false) {
   loadGroups();
   loadContacts();
   loadTemplatesList();
+  loadAvailableTags();
 
   if (!silent) toast('Profil selectionne', 'info');
 }
@@ -464,9 +473,10 @@ async function loadTemplate() {
 // --- Preview ---
 function togglePreview() {
   const preview = document.getElementById('message-preview');
-  const content = document.getElementById('message-content').value;
+  const ed = document.getElementById('message-content');
+  const { text } = getEditorText(ed);
   if (preview.classList.contains('hidden')) {
-    preview.innerHTML = formatWhatsApp(content);
+    preview.innerHTML = formatWhatsApp(text);
     preview.classList.remove('hidden');
   } else {
     preview.classList.add('hidden');
@@ -513,7 +523,11 @@ function toggleEmojiPicker(targetId, btn) {
 
   picker.addEventListener('emoji-click', (event) => {
     const emoji = event.detail.unicode;
-    insertAtCursor(textarea, emoji);
+    if (textarea.classList.contains('contenteditable')) {
+      insertEmojiAtCaret(emoji);
+    } else {
+      insertAtCursor(textarea, emoji);
+    }
   });
 
   activeEmojiPicker = container;
@@ -609,19 +623,330 @@ function initKeyboardShortcuts() {
   });
 }
 
+// ==============================
+//  TAGS (predefined, auto color)
+// ==============================
+function tagColor(name) {
+  // Deterministic color from name — HSL with good saturation
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  const h = Math.abs(hash) % 360;
+  return `hsl(${h}, 55%, 42%)`;
+}
+
+async function loadAvailableTags() {
+  try {
+    const res = await api('/api/tags');
+    availableTags = await res.json();
+    renderTagsSelector();
+    renderTagsListSettings();
+  } catch (err) { console.error('Failed to load tags:', err); }
+}
+
+function renderTagsSelector() {
+  const container = document.getElementById('tags-selector');
+  if (!container) return;
+  container.innerHTML = availableTags.map((t) => {
+    const active = selectedTags.includes(t.name);
+    return `<span class="tag-pill ${active ? 'selected' : ''}" style="background:${tagColor(t.name)}" onclick="toggleSelectTag('${escapeHtml(t.name).replace(/'/g, '&#39;')}')">#${escapeHtml(t.name)}</span>`;
+  }).join('');
+}
+
+function toggleSelectTag(name) {
+  const i = selectedTags.indexOf(name);
+  if (i >= 0) selectedTags.splice(i, 1);
+  else selectedTags.push(name);
+  renderTagsSelector();
+}
+
+function renderTagsListSettings() {
+  const container = document.getElementById('tags-list');
+  if (!container) return;
+  if (availableTags.length === 0) {
+    container.innerHTML = '<p style="color:var(--text-light);font-style:italic">Aucun tag. Ajoutez-en !</p>';
+    return;
+  }
+  container.innerHTML = availableTags.map((t) => `
+    <span class="tag-item" style="background:${tagColor(t.name)}">
+      #${escapeHtml(t.name)}
+      <button class="tag-delete" onclick="deleteTag(${t.id})" title="Supprimer">&times;</button>
+    </span>
+  `).join('');
+}
+
+async function createTag() {
+  const input = document.getElementById('new-tag-name');
+  const name = (input.value || '').trim();
+  if (!name) return;
+  try {
+    const res = await api('/api/tags', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (res.ok) {
+      input.value = '';
+      await loadAvailableTags();
+      toast('Tag cree', 'success');
+    } else {
+      const d = await res.json();
+      toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+async function deleteTag(id) {
+  if (!confirm('Supprimer ce tag ? Il sera retire de tous les messages.')) return;
+  try {
+    const res = await api(`/api/tags/${id}`, { method: 'DELETE' });
+    if (res.ok) { await loadAvailableTags(); toast('Tag supprime', 'success'); }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+function showSettings() {
+  document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
+  document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
+  document.getElementById('section-settings').classList.remove('hidden');
+  loadAvailableTags();
+}
+
+// ==============================
+//  CONTENTEDITABLE compose editor
+//  with @mentions (chips) + emoji + formatting
+// ==============================
+function initComposeEditor() {
+  const ed = document.getElementById('message-content');
+  if (!ed) return;
+  // Mention detection on input
+  ed.addEventListener('input', onComposeInput);
+  ed.addEventListener('keydown', onComposeKeydown);
+  ed.addEventListener('blur', () => setTimeout(hideMentionDropdown, 150));
+}
+
+let mentionAnchorNode = null;
+let mentionStartOffset = null;
+let mentionCurrentText = '';
+let mentionActiveIdx = 0;
+let mentionParticipants = [];
+
+function getEditorText(ed) {
+  // Convert contenteditable to raw text with @number placeholders + mentions array
+  let text = '';
+  const mentions = [];
+  const walk = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent;
+    } else if (node.nodeType === Node.ELEMENT_NODE) {
+      if (node.classList && node.classList.contains('mention-chip')) {
+        const cid = node.dataset.contactId;
+        const num = node.dataset.number;
+        if (num) text += '@' + num;
+        if (cid && !mentions.includes(cid)) mentions.push(cid);
+      } else if (node.tagName === 'BR') {
+        text += '\n';
+      } else if (node.tagName === 'DIV' && node.parentNode === ed && node !== ed.firstChild) {
+        // Each <div> is typically a new line in contenteditable
+        text += '\n';
+        node.childNodes.forEach(walk);
+      } else {
+        node.childNodes.forEach(walk);
+      }
+    }
+  };
+  ed.childNodes.forEach(walk);
+  return { text: text.replace(/\u00A0/g, ' '), mentions };
+}
+
+function setEditorFromText(text) {
+  // Simple: insert text directly (no mention re-parsing on restore)
+  const ed = document.getElementById('message-content');
+  if (!ed) return;
+  ed.innerHTML = '';
+  ed.appendChild(document.createTextNode(text || ''));
+}
+
+function onComposeInput(e) {
+  detectMentionAtCaret();
+}
+
+function onComposeKeydown(e) {
+  const dropdown = document.getElementById('mention-dropdown');
+  const isOpen = dropdown && !dropdown.classList.contains('hidden');
+  if (isOpen) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); mentionActiveIdx = Math.min(mentionParticipants.length - 1, mentionActiveIdx + 1); renderMentionDropdown(); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); mentionActiveIdx = Math.max(0, mentionActiveIdx - 1); renderMentionDropdown(); return; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); selectMention(mentionParticipants[mentionActiveIdx]); return; }
+    if (e.key === 'Escape') { e.preventDefault(); hideMentionDropdown(); return; }
+  }
+}
+
+function detectMentionAtCaret() {
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return hideMentionDropdown();
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== Node.TEXT_NODE) return hideMentionDropdown();
+  const text = node.textContent.slice(0, range.startOffset);
+  const m = text.match(/@([\w-]*)$/);
+  if (!m) return hideMentionDropdown();
+  mentionAnchorNode = node;
+  mentionStartOffset = range.startOffset - m[0].length;
+  mentionCurrentText = m[1].toLowerCase();
+  openMentionDropdown();
+}
+
+async function openMentionDropdown() {
+  // Load participants for selected groups (if not already)
+  const promises = selectedGroups.filter(g => g.id.endsWith('@g.us')).map(async (g) => {
+    if (participantsCache[g.id]) return participantsCache[g.id];
+    try {
+      const res = await api(`/api/groups/${encodeURIComponent(g.id)}/participants`);
+      const data = await res.json();
+      participantsCache[g.id] = Array.isArray(data) ? data : [];
+      return participantsCache[g.id];
+    } catch (_) { return []; }
+  });
+
+  // Also include contacts (for 1-to-1 with contacts)
+  const contactPart = contacts.map(c => ({ id: c.id, number: c.number, name: c.name }));
+
+  const arrays = await Promise.all(promises);
+  const all = [].concat(...arrays, contactPart);
+  // Dedupe by id
+  const seen = new Set();
+  const unique = all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
+  // Filter by current text
+  mentionParticipants = unique.filter(p =>
+    (p.name || '').toLowerCase().includes(mentionCurrentText) ||
+    (p.number || '').includes(mentionCurrentText)
+  ).slice(0, 20);
+  mentionActiveIdx = 0;
+  renderMentionDropdown();
+}
+
+function renderMentionDropdown() {
+  const dd = document.getElementById('mention-dropdown');
+  if (!dd) return;
+  if (mentionParticipants.length === 0) return hideMentionDropdown();
+
+  dd.innerHTML = mentionParticipants.map((p, i) => `
+    <div class="mention-item ${i === mentionActiveIdx ? 'active' : ''}" onmousedown="event.preventDefault();selectMention(mentionParticipants[${i}])">
+      <span class="m-name">${escapeHtml(p.name || p.number)}</span>
+      <span class="m-number">${escapeHtml(p.number || '')}</span>
+    </div>
+  `).join('');
+
+  // Position near the caret
+  const sel = window.getSelection();
+  if (sel.rangeCount) {
+    const range = sel.getRangeAt(0).cloneRange();
+    const rect = range.getBoundingClientRect();
+    const ed = document.getElementById('message-content');
+    const edRect = ed.getBoundingClientRect();
+    dd.style.position = 'absolute';
+    dd.style.left = (rect.left - edRect.left + ed.scrollLeft) + 'px';
+    dd.style.top = (rect.bottom - edRect.top + ed.scrollTop + 4) + 'px';
+  }
+  dd.classList.remove('hidden');
+}
+
+function hideMentionDropdown() {
+  const dd = document.getElementById('mention-dropdown');
+  if (dd) dd.classList.add('hidden');
+  mentionAnchorNode = null;
+  mentionStartOffset = null;
+  mentionCurrentText = '';
+  mentionParticipants = [];
+}
+
+function selectMention(participant) {
+  if (!participant || !mentionAnchorNode || mentionStartOffset == null) return hideMentionDropdown();
+
+  const node = mentionAnchorNode;
+  const startOffset = mentionStartOffset;
+  const textBefore = node.textContent.slice(0, startOffset);
+  const typedLen = 1 /*@*/ + mentionCurrentText.length;
+  const textAfter = node.textContent.slice(startOffset + typedLen);
+
+  // Split the text node: before | chip | after
+  const parent = node.parentNode;
+  const beforeNode = document.createTextNode(textBefore);
+  const afterNode = document.createTextNode(textAfter || '\u00A0');
+  const chip = document.createElement('span');
+  chip.className = 'mention-chip';
+  chip.contentEditable = 'false';
+  chip.dataset.contactId = participant.id;
+  chip.dataset.number = participant.number || '';
+  chip.textContent = participant.name || participant.number;
+
+  parent.insertBefore(beforeNode, node);
+  parent.insertBefore(chip, node);
+  parent.insertBefore(afterNode, node);
+  parent.removeChild(node);
+
+  // Place caret after the chip
+  const sel = window.getSelection();
+  const range = document.createRange();
+  range.setStart(afterNode, 0);
+  range.collapse(true);
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  hideMentionDropdown();
+}
+
+// Adapted emoji insertion for contenteditable
+function insertEmojiAtCaret(emoji) {
+  const ed = document.getElementById('message-content');
+  if (!ed) return;
+  ed.focus();
+  const sel = window.getSelection();
+  if (!sel.rangeCount) {
+    ed.appendChild(document.createTextNode(emoji));
+    return;
+  }
+  const range = sel.getRangeAt(0);
+  range.deleteContents();
+  range.insertNode(document.createTextNode(emoji));
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+// Wrap selection in contenteditable (for B/I/S format)
+function wrapSelectionCE(wrap) {
+  const ed = document.getElementById('message-content');
+  if (!ed) return;
+  ed.focus();
+  const sel = window.getSelection();
+  if (!sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const selected = range.toString() || 'texte';
+  range.deleteContents();
+  range.insertNode(document.createTextNode(wrap + selected + wrap));
+}
+
 function initFormatToolbars() {
   document.querySelectorAll('.format-toolbar').forEach((toolbar) => {
     if (toolbar.dataset.initialized) return;
     toolbar.dataset.initialized = '1';
     const targetId = toolbar.dataset.target;
     toolbar.querySelectorAll('.fmt-btn').forEach((btn) => {
-      if (btn.classList.contains('fmt-emoji')) return; // has its own onclick
+      if (btn.classList.contains('fmt-emoji')) return;
       btn.addEventListener('click', (e) => {
         e.preventDefault();
-        const textarea = document.getElementById(targetId);
-        if (!textarea) return;
-        if (btn.dataset.wrap) wrapSelection(textarea, btn.dataset.wrap);
-        else if (btn.dataset.prefix) prefixLines(textarea, btn.dataset.prefix);
+        const target = document.getElementById(targetId);
+        if (!target) return;
+        // Contenteditable (message) uses different helpers
+        if (target.classList.contains('contenteditable')) {
+          if (btn.dataset.wrap) wrapSelectionCE(btn.dataset.wrap);
+          else if (btn.dataset.prefix) {
+            target.focus();
+            document.execCommand('insertText', false, btn.dataset.prefix);
+          }
+        } else {
+          if (btn.dataset.wrap) wrapSelection(target, btn.dataset.wrap);
+          else if (btn.dataset.prefix) prefixLines(target, btn.dataset.prefix);
+        }
       });
     });
   });
@@ -705,91 +1030,139 @@ async function scheduleMessage() {
   } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
-function parseTagsInput(str) {
-  return (str || '').split(/[\s,]+/).map((t) => t.trim().replace(/^#/, '')).filter((t) => t.length > 0);
-}
-
 function buildPayload() {
   const allRecipients = [...selectedGroups, ...selectedContacts];
   if (allRecipients.length === 0) { toast('Selectionnez au moins un groupe ou un contact', 'error'); return null; }
-  const content = document.getElementById('message-content').value.trim();
+  const ed = document.getElementById('message-content');
+  const { text, mentions } = getEditorText(ed);
+  const content = text.trim();
   if (!content && uploadedFiles.length === 0) { toast('Redigez un message ou ajoutez un fichier', 'error'); return null; }
   const notes = (document.getElementById('message-notes')?.value || '').trim();
-  const tags = parseTagsInput(document.getElementById('message-tags')?.value);
   return {
     groups: allRecipients, content,
     attachments: uploadedFiles.map((f) => ({ filename: f.filename, originalname: f.originalname })),
     notes,
-    tags,
+    tags: [...selectedTags],
+    mentions,
   };
 }
 
 function resetForm() {
   selectedGroups = []; selectedContacts = []; uploadedFiles = [];
-  document.getElementById('message-content').value = '';
+  const ed = document.getElementById('message-content');
+  if (ed) ed.innerHTML = '';
   document.getElementById('schedule-datetime').value = '';
   document.getElementById('group-search').value = '';
   document.getElementById('contact-search').value = '';
   document.getElementById('message-preview').classList.add('hidden');
   const notesEl = document.getElementById('message-notes');
   if (notesEl) notesEl.value = '';
-  const tagsEl = document.getElementById('message-tags');
-  if (tagsEl) tagsEl.value = '';
+  selectedTags = [];
+  renderTagsSelector();
   renderGroups(); renderContacts(); renderFileList();
   editingMessageId = null;
 }
 
 // --- Queue ---
+let queueCache = [];
+
 async function loadQueue() {
   try {
     const res = await api('/api/messages');
-    const messages = await res.json();
-    const container = document.getElementById('queue-list');
-
-    if (messages.length === 0) { container.innerHTML = '<p class="empty">Aucun message programme.</p>'; return; }
-
-    container.innerHTML = messages.map((m) => {
-      const tags = Array.isArray(m.tags) ? m.tags : [];
-      return `
-      <div class="queue-item">
-        <div class="queue-item-header">
-          <span class="date">${formatDate(m.scheduled_at)}</span>
-          <span style="font-size:12px;color:var(--text-light)">#${m.id}</span>
-        </div>
-        <div class="queue-item-groups">
-          ${m.groups.map((g) => `<span class="group-tag">${escapeHtml(g.name)}</span>`).join('')}
-        </div>
-        <div class="queue-item-content">${escapeHtml(m.content).substring(0, 200)}</div>
-        ${m.attachments.length > 0 ? `<div style="font-size:12px;color:var(--text-light)">&#128206; ${m.attachments.length} piece(s) jointe(s)</div>` : ''}
-        ${tags.length > 0 ? `<div class="message-tags">${tags.map(t => `<span class="message-tag">#${escapeHtml(t)}</span>`).join('')}</div>` : ''}
-        ${m.notes ? `<div style="font-size:12px;color:#7d6608;background:#fef9e7;padding:6px 8px;border-radius:4px;margin-top:6px">&#128221; ${escapeHtml(m.notes)}</div>` : ''}
-        <div class="queue-item-actions">
-          <button class="btn btn-sm" onclick='openPreviewFromQueue(${m.id})'>Apercu</button>
-          <button class="btn btn-sm" onclick="editQueueMessage(${m.id})">Modifier</button>
-          <button class="btn btn-sm" onclick='duplicateQueueMessage(${m.id})'>Dupliquer</button>
-          <button class="btn btn-sm btn-primary" onclick="sendQueueMessage(${m.id})">Envoyer maintenant</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteQueueMessage(${m.id})">Supprimer</button>
-        </div>
-      </div>`;
-    }).join('');
+    queueCache = await res.json();
+    renderQueueFilterTagsChips();
+    renderQueueFiltered();
   } catch (err) { console.error('Failed to load queue:', err); }
+}
+
+function renderQueueFilterTagsChips() {
+  const container = document.getElementById('queue-filter-tags');
+  if (!container) return;
+  if (!filterState.queue.tags) filterState.queue.tags = [];
+  if (availableTags.length === 0) { container.innerHTML = '<span style="font-size:11px;color:var(--text-light)">Aucun tag defini</span>'; return; }
+  container.innerHTML = availableTags.map(t => {
+    const active = filterState.queue.tags.includes(t.name);
+    return `<span class="tag-pill ${active ? 'selected' : ''}" style="background:${tagColor(t.name)}" onclick="toggleQueueFilterTag('${escapeHtml(t.name).replace(/'/g, '&#39;')}')">#${escapeHtml(t.name)}</span>`;
+  }).join('');
+}
+
+function toggleQueueFilterTag(name) {
+  const arr = filterState.queue.tags = filterState.queue.tags || [];
+  const i = arr.indexOf(name);
+  if (i >= 0) arr.splice(i, 1); else arr.push(name);
+  renderQueueFilterTagsChips();
+  renderQueueFiltered();
+}
+
+function resetQueueFilters() {
+  filterState.queue = { tags: [] };
+  document.getElementById('queue-filter-text').value = '';
+  document.getElementById('queue-filter-recipient').value = '';
+  document.getElementById('queue-filter-from').value = '';
+  document.getElementById('queue-filter-to').value = '';
+  renderQueueFilterTagsChips();
+  renderQueueFiltered();
+}
+
+function renderQueueFiltered() {
+  const text = (document.getElementById('queue-filter-text')?.value || '').toLowerCase();
+  const recipient = (document.getElementById('queue-filter-recipient')?.value || '').toLowerCase();
+  const from = document.getElementById('queue-filter-from')?.value || '';
+  const to = document.getElementById('queue-filter-to')?.value || '';
+  const tagsFilter = filterState.queue.tags || [];
+
+  const messages = queueCache.filter((m) => {
+    if (text && !(m.content || '').toLowerCase().includes(text)) return false;
+    if (recipient && !(m.groups || []).some(g => (g.name || '').toLowerCase().includes(recipient))) return false;
+    if (from && (m.scheduled_at || '') < from) return false;
+    if (to && (m.scheduled_at || '') > (to + 'T23:59:59')) return false;
+    if (tagsFilter.length && !(m.tags || []).some(t => tagsFilter.includes(t))) return false;
+    return true;
+  });
+
+  const container = document.getElementById('queue-list');
+  if (messages.length === 0) { container.innerHTML = '<p class="empty">Aucun message dans la file (ou filtres trop restrictifs).</p>'; return; }
+
+  container.innerHTML = messages.map((m) => {
+    const tags = Array.isArray(m.tags) ? m.tags : [];
+    return `
+    <div class="queue-item">
+      <div class="queue-item-header">
+        <span class="date">${formatDate(m.scheduled_at)}</span>
+        <span style="font-size:12px;color:var(--text-light)">#${m.id}</span>
+      </div>
+      <div class="queue-item-groups">
+        ${m.groups.map((g) => `<span class="group-tag">${escapeHtml(g.name)}</span>`).join('')}
+      </div>
+      <div class="queue-item-content">${escapeHtml(m.content).substring(0, 200)}</div>
+      ${m.attachments.length > 0 ? `<div style="font-size:12px;color:var(--text-light)">&#128206; ${m.attachments.length} piece(s) jointe(s)</div>` : ''}
+      ${tags.length > 0 ? `<div class="message-tags">${tags.map(t => `<span class="message-tag" style="background:${tagColor(t)}">#${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+      ${m.notes ? `<div style="font-size:12px;color:#7d6608;background:#fef9e7;padding:6px 8px;border-radius:4px;margin-top:6px">&#128221; ${escapeHtml(m.notes)}</div>` : ''}
+      <div class="queue-item-actions">
+        <button class="btn btn-sm" onclick='openPreviewFromQueue(${m.id})'>Apercu</button>
+        <button class="btn btn-sm" onclick="editQueueMessage(${m.id})">Modifier</button>
+        <button class="btn btn-sm" onclick='duplicateQueueMessage(${m.id})'>Dupliquer</button>
+        <button class="btn btn-sm btn-primary" onclick="sendQueueMessage(${m.id})">Envoyer maintenant</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteQueueMessage(${m.id})">Supprimer</button>
+      </div>
+    </div>`;
+  }).join('');
 }
 
 function fillComposeFromMessage(msg, { keepId = false, keepDate = true } = {}) {
   selectedGroups = Array.isArray(msg.groups) ? [...msg.groups] : [];
   selectedContacts = [];
   uploadedFiles = Array.isArray(msg.attachments) ? [...msg.attachments] : [];
-  document.getElementById('message-content').value = msg.content || '';
+  setEditorFromText(msg.content || '');
   const dt = document.getElementById('schedule-datetime');
   if (keepDate && msg.scheduled_at) dt.value = String(msg.scheduled_at).slice(0, 16);
   else dt.value = '';
   const notesEl = document.getElementById('message-notes');
   if (notesEl) notesEl.value = msg.notes || '';
-  const tagsEl = document.getElementById('message-tags');
-  if (tagsEl) tagsEl.value = Array.isArray(msg.tags) ? msg.tags.map(t => '#' + t).join(' ') : '';
+  selectedTags = Array.isArray(msg.tags) ? [...msg.tags] : [];
+  renderTagsSelector();
   editingMessageId = keepId ? msg.id : null;
   renderGroups(); renderContacts(); renderFileList();
-  // Switch to compose section
   document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
   document.querySelector('[data-section="compose"]').classList.add('active');
   document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
@@ -1057,43 +1430,85 @@ async function deleteTemplate(id) {
 }
 
 // --- History ---
+let historyCache = [];
+
 async function loadHistory() {
   try {
-    const params = new URLSearchParams();
-    const group = document.getElementById('filter-group').value;
-    const status = document.getElementById('filter-status').value;
-    const from = document.getElementById('filter-from').value;
-    const to = document.getElementById('filter-to').value;
-    if (group) params.set('group_name', group);
-    if (status) params.set('status', status);
-    if (from) params.set('date_from', from);
-    if (to) params.set('date_to', to);
-
-    const res = await api(`/api/history?${params}`);
-    const rows = await res.json();
-    const tbody = document.getElementById('history-body');
-
-    if (rows.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">Aucun envoi enregistre</td></tr>';
-      return;
-    }
-
-    // Stash rows for preview/duplicate access
-    window._historyRows = rows;
-
-    tbody.innerHTML = rows.map((r, idx) => `
-      <tr>
-        <td>${formatDate(r.sent_at)}</td>
-        <td>${escapeHtml(r.group_name)}</td>
-        <td>${escapeHtml((r.content || '').substring(0, 80))}</td>
-        <td class="status-${r.status}">${r.status === 'sent' ? 'Envoye' : 'Erreur'}</td>
-        <td>${escapeHtml(r.error || '-')}</td>
-        <td style="white-space:nowrap">
-          <button class="btn btn-xs" onclick="openPreviewFromHistory(${idx})">Apercu</button>
-          <button class="btn btn-xs" onclick="duplicateHistoryMessage(${idx})">Dupliquer</button>
-        </td>
-      </tr>`).join('');
+    const res = await api('/api/history');
+    historyCache = await res.json();
+    window._historyRows = historyCache;
+    renderHistoryFilterTagsChips();
+    renderHistoryFiltered();
   } catch (err) { console.error('Failed to load history:', err); }
+}
+
+function renderHistoryFilterTagsChips() {
+  const container = document.getElementById('history-filter-tags');
+  if (!container) return;
+  if (!filterState.history.tags) filterState.history.tags = [];
+  if (availableTags.length === 0) { container.innerHTML = '<span style="font-size:11px;color:var(--text-light)">Aucun tag defini</span>'; return; }
+  container.innerHTML = availableTags.map(t => {
+    const active = filterState.history.tags.includes(t.name);
+    return `<span class="tag-pill ${active ? 'selected' : ''}" style="background:${tagColor(t.name)}" onclick="toggleHistoryFilterTag('${escapeHtml(t.name).replace(/'/g, '&#39;')}')">#${escapeHtml(t.name)}</span>`;
+  }).join('');
+}
+
+function toggleHistoryFilterTag(name) {
+  const arr = filterState.history.tags = filterState.history.tags || [];
+  const i = arr.indexOf(name);
+  if (i >= 0) arr.splice(i, 1); else arr.push(name);
+  renderHistoryFilterTagsChips();
+  renderHistoryFiltered();
+}
+
+function resetHistoryFilters() {
+  filterState.history = { tags: [] };
+  document.getElementById('history-filter-text').value = '';
+  document.getElementById('filter-group').value = '';
+  document.getElementById('filter-status').value = '';
+  document.getElementById('filter-from').value = '';
+  document.getElementById('filter-to').value = '';
+  renderHistoryFilterTagsChips();
+  renderHistoryFiltered();
+}
+
+function renderHistoryFiltered() {
+  const text = (document.getElementById('history-filter-text')?.value || '').toLowerCase();
+  const group = (document.getElementById('filter-group')?.value || '').toLowerCase();
+  const status = document.getElementById('filter-status')?.value || '';
+  const from = document.getElementById('filter-from')?.value || '';
+  const to = document.getElementById('filter-to')?.value || '';
+  const tagsFilter = filterState.history.tags || [];
+
+  const rows = historyCache.filter((r) => {
+    if (text && !(r.content || '').toLowerCase().includes(text)) return false;
+    if (group && !(r.group_name || '').toLowerCase().includes(group)) return false;
+    if (status && r.status !== status) return false;
+    if (from && (r.sent_at || '') < from) return false;
+    if (to && (r.sent_at || '') > (to + 'T23:59:59')) return false;
+    if (tagsFilter.length && !(r.tags || []).some(t => tagsFilter.includes(t))) return false;
+    return true;
+  });
+
+  const tbody = document.getElementById('history-body');
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text-light)">Aucun envoi (ou filtres trop restrictifs)</td></tr>';
+    return;
+  }
+  window._historyRows = rows;
+
+  tbody.innerHTML = rows.map((r, idx) => `
+    <tr>
+      <td>${formatDate(r.sent_at)}</td>
+      <td>${escapeHtml(r.group_name)}</td>
+      <td>${escapeHtml((r.content || '').substring(0, 80))}</td>
+      <td class="status-${r.status}">${r.status === 'sent' ? 'Envoye' : 'Erreur'}</td>
+      <td>${escapeHtml(r.error || '-')}</td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-xs" onclick="openPreviewFromHistory(${idx})">Apercu</button>
+        <button class="btn btn-xs" onclick="duplicateHistoryMessage(${idx})">Dupliquer</button>
+      </td>
+    </tr>`).join('');
 }
 
 function exportCSV() {

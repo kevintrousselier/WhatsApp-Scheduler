@@ -91,6 +91,28 @@ async function init() {
   }
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS tags (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(user_id, name),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  // Migration: add mentions_json to messages
+  try {
+    const cols = getAll("PRAGMA table_info('messages')");
+    if (!cols.some(c => c.name === 'mentions_json')) {
+      db.run("ALTER TABLE messages ADD COLUMN mentions_json TEXT DEFAULT '[]'");
+      console.log('[Database] Migrated messages: added mentions_json column');
+    }
+  } catch (err) {
+    console.error('[Database] mentions migration error:', err.message);
+  }
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS send_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       user_id INTEGER NOT NULL,
@@ -153,6 +175,7 @@ function parseMessage(row) {
     groups: JSON.parse(row.groups_json),
     attachments: JSON.parse(row.attachments_json || '[]'),
     tags: JSON.parse(row.tags_json || '[]'),
+    mentions: JSON.parse(row.mentions_json || '[]'),
     notes: row.notes || '',
   };
 }
@@ -172,6 +195,7 @@ function parseHistoryRow(row) {
     ...row,
     attachments: JSON.parse(row.attachments_json || '[]'),
     tags: JSON.parse(row.tags_json || '[]'),
+    mentions: JSON.parse(row.mentions_json || '[]'),
     notes: row.notes || '',
   };
 }
@@ -200,11 +224,11 @@ module.exports = {
   },
 
   // --- Messages ---
-  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [] }) {
+  createMessage(userId, { groups, content, attachments = [], scheduled_at, status = 'pending', notes = '', tags = [], mentions = [] }) {
     const id = runInsert(
-      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status, notes || '', JSON.stringify(tags || [])]
+      `INSERT INTO messages (user_id, groups_json, content, attachments_json, scheduled_at, status, notes, tags_json, mentions_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [userId, JSON.stringify(groups), content, JSON.stringify(attachments), scheduled_at || null, status, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || [])]
     );
     return this.getMessageById(id);
   },
@@ -227,11 +251,11 @@ module.exports = {
     ).map(parseMessage);
   },
 
-  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [] }) {
+  updateMessage(id, userId, { groups, content, attachments, scheduled_at, notes = '', tags = [], mentions = [] }) {
     runQuery(
-      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?
+      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, scheduled_at = ?, notes = ?, tags_json = ?, mentions_json = ?
        WHERE id = ? AND user_id = ? AND status = 'pending'`,
-      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), id, userId]
+      [JSON.stringify(groups), content, JSON.stringify(attachments || []), scheduled_at, notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), id, userId]
     );
     return this.getMessageById(id);
   },
@@ -278,6 +302,79 @@ module.exports = {
     return { changes: before && before.c > 0 ? 1 : 0 };
   },
 
+  // --- Tags ---
+  createTag(userId, name) {
+    try {
+      const id = runInsert('INSERT INTO tags (user_id, name) VALUES (?, ?)', [userId, name]);
+      return this.getTagById(id);
+    } catch (err) {
+      if (err.message.includes('UNIQUE')) {
+        const existing = getOne('SELECT * FROM tags WHERE user_id = ? AND name = ?', [userId, name]);
+        return existing;
+      }
+      throw err;
+    }
+  },
+
+  getTagById(id) {
+    return getOne('SELECT * FROM tags WHERE id = ?', [id]);
+  },
+
+  getAllTags(userId) {
+    return getAll('SELECT * FROM tags WHERE user_id = ? ORDER BY name ASC', [userId]);
+  },
+
+  renameTag(id, userId, newName) {
+    runQuery('UPDATE tags SET name = ? WHERE id = ? AND user_id = ?', [newName, id, userId]);
+    return this.getTagById(id);
+  },
+
+  deleteTag(id, userId) {
+    const tag = getOne('SELECT * FROM tags WHERE id = ? AND user_id = ?', [id, userId]);
+    if (!tag) return { changes: 0 };
+    runQuery('DELETE FROM tags WHERE id = ? AND user_id = ?', [id, userId]);
+    // Also strip this tag name from all messages
+    const msgs = getAll("SELECT id, tags_json FROM messages WHERE user_id = ?", [userId]);
+    for (const m of msgs) {
+      try {
+        const names = JSON.parse(m.tags_json || '[]');
+        if (Array.isArray(names) && names.includes(tag.name)) {
+          const filtered = names.filter(n => n !== tag.name);
+          db.run('UPDATE messages SET tags_json = ? WHERE id = ?', [JSON.stringify(filtered), m.id]);
+        }
+      } catch (_) {}
+    }
+    save();
+    return { changes: 1 };
+  },
+
+  // Auto-migrate free-form tags from existing messages into the tags table
+  ensureTagsMigrated(userId) {
+    try {
+      const msgs = getAll("SELECT tags_json FROM messages WHERE user_id = ?", [userId]);
+      const existingTags = new Set(this.getAllTags(userId).map(t => t.name));
+      const allNames = new Set();
+      for (const m of msgs) {
+        try {
+          const arr = JSON.parse(m.tags_json || '[]');
+          if (Array.isArray(arr)) arr.forEach(n => { if (n && typeof n === 'string') allNames.add(n); });
+        } catch (_) {}
+      }
+      let added = 0;
+      for (const name of allNames) {
+        if (!existingTags.has(name)) {
+          try {
+            runQuery('INSERT OR IGNORE INTO tags (user_id, name) VALUES (?, ?)', [userId, name]);
+            added++;
+          } catch (_) {}
+        }
+      }
+      if (added > 0) console.log(`[Database] Auto-imported ${added} tag(s) for user ${userId}`);
+    } catch (err) {
+      console.error('[Database] ensureTagsMigrated error:', err.message);
+    }
+  },
+
   // --- Send log ---
   logSend({ user_id, message_id, group_id, group_name, status, error = null }) {
     runQuery(
@@ -287,7 +384,7 @@ module.exports = {
   },
 
   getHistory(userId, filters = {}) {
-    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json FROM send_log sl
+    let sql = `SELECT sl.*, m.content, m.attachments_json, m.notes, m.tags_json, m.mentions_json FROM send_log sl
                JOIN messages m ON sl.message_id = m.id WHERE sl.user_id = ?`;
     const params = [userId];
 
