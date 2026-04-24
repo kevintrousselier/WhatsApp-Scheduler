@@ -14,6 +14,8 @@ let availableTags = [];
 let selectedTags = [];
 let participantsCache = {};
 let filterState = { queue: {}, history: {} };
+let currentDraftId = null;
+let autoSaveTimer = null;
 
 // --- Init ---
 document.addEventListener('DOMContentLoaded', () => {
@@ -174,6 +176,7 @@ async function selectProfile(userId, silent = false) {
   loadContacts();
   loadTemplatesList();
   loadAvailableTags();
+  startAutoSave();
 
   if (!silent) toast('Profil selectionne', 'info');
 }
@@ -198,6 +201,7 @@ function initNavigation() {
       document.getElementById(`section-${section}`).classList.remove('hidden');
 
       if (section === 'queue') loadQueue();
+      if (section === 'drafts') loadDrafts();
       if (section === 'templates') loadTemplatesList();
       if (section === 'history') loadHistory();
     });
@@ -214,6 +218,14 @@ function initSSE() {
   evtSource.onmessage = (event) => {
     const data = JSON.parse(event.data);
 
+    if (data.type === 'groups_updated') {
+      loadGroups();
+      return;
+    }
+    if (data.type === 'contacts_updated') {
+      loadContacts();
+      return;
+    }
     if (data.type === 'qr') {
       showQRCode(data.qrCode);
       updateStatusBadge('qr');
@@ -373,9 +385,11 @@ function removeGroup(id) {
 }
 
 function renderSelectedGroups() {
-  document.getElementById('selected-groups').innerHTML = selectedGroups
-    .map((g) => `<span class="group-tag">${escapeHtml(g.name)} <span class="remove" onclick="removeGroup('${g.id}')">&times;</span></span>`)
+  const container = document.getElementById('selected-groups');
+  container.innerHTML = selectedGroups
+    .map((g, i) => `<span class="group-tag draggable" draggable="true" data-idx="${i}" data-list="groups"><span class="drag-handle">&#x2630;</span> ${escapeHtml(g.name)} <span class="remove" onclick="removeGroup('${g.id}')">&times;</span></span>`)
     .join('');
+  attachDragHandlers(container, 'groups');
 }
 
 // --- Contacts ---
@@ -386,6 +400,22 @@ async function loadContacts() {
     contacts = await res.json();
     renderContacts();
   } catch (err) { console.error('Failed to load contacts:', err); }
+}
+
+async function manualRefreshContacts() {
+  toast('Synchronisation en cours...', 'info');
+  try {
+    const res = await api('/api/refresh', { method: 'POST' });
+    if (res.ok) {
+      toast('Groupes et contacts rafraichis', 'success');
+      loadGroups();
+      loadContacts();
+      participantsCache = {};
+    } else {
+      const d = await res.json();
+      toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 function renderContacts(filter = '') {
@@ -425,8 +455,48 @@ function renderSelectedContacts() {
   const container = document.getElementById('selected-contacts');
   if (!container) return;
   container.innerHTML = selectedContacts
-    .map((c) => `<span class="group-tag">${escapeHtml(c.name)} <span class="remove" onclick="removeContact('${c.id}')">&times;</span></span>`)
+    .map((c, i) => `<span class="group-tag draggable" draggable="true" data-idx="${i}" data-list="contacts"><span class="drag-handle">&#x2630;</span> ${escapeHtml(c.name)} <span class="remove" onclick="removeContact('${c.id}')">&times;</span></span>`)
     .join('');
+  attachDragHandlers(container, 'contacts');
+}
+
+// --- Drag & drop recipients ---
+let draggedIdx = null;
+let draggedList = null;
+
+function attachDragHandlers(container, listName) {
+  container.querySelectorAll('.draggable').forEach((el) => {
+    el.addEventListener('dragstart', (e) => {
+      draggedIdx = parseInt(el.dataset.idx);
+      draggedList = listName;
+      el.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      try { e.dataTransfer.setData('text/plain', String(draggedIdx)); } catch (_) {}
+    });
+    el.addEventListener('dragend', () => {
+      el.classList.remove('dragging');
+      container.querySelectorAll('.drop-target').forEach(n => n.classList.remove('drop-target'));
+    });
+    el.addEventListener('dragover', (e) => {
+      if (draggedList !== listName) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      el.classList.add('drop-target');
+    });
+    el.addEventListener('dragleave', () => el.classList.remove('drop-target'));
+    el.addEventListener('drop', (e) => {
+      if (draggedList !== listName) return;
+      e.preventDefault();
+      const targetIdx = parseInt(el.dataset.idx);
+      if (draggedIdx == null || targetIdx === draggedIdx) return;
+      const arr = listName === 'groups' ? selectedGroups : selectedContacts;
+      const [moved] = arr.splice(draggedIdx, 1);
+      arr.splice(targetIdx, 0, moved);
+      draggedIdx = null;
+      draggedList = null;
+      if (listName === 'groups') renderSelectedGroups(); else renderSelectedContacts();
+    });
+  });
 }
 
 // --- Mode ---
@@ -512,14 +582,29 @@ function toggleEmojiPicker(targetId, btn) {
   picker.setAttribute('locale', 'fr');
   container.appendChild(picker);
 
-  // Position near the button
-  const wrapper = btn.closest('.textarea-wrapper') || textarea.parentElement;
-  wrapper.style.position = 'relative';
-  wrapper.appendChild(container);
+  // Position : fixed, anchored to the smiley button (below, flip above if no room)
+  document.body.appendChild(container);
+  container.style.position = 'fixed';
 
-  // Position: below the button, right-aligned
-  container.style.right = '0';
-  container.style.top = '100%';
+  const rect = btn.getBoundingClientRect();
+  const pickerWidth = 340;
+  const pickerHeight = 380;
+  const margin = 6;
+
+  let left = rect.right - pickerWidth;
+  if (left < 8) left = 8;
+  if (left + pickerWidth > window.innerWidth - 8) left = window.innerWidth - pickerWidth - 8;
+
+  let top = rect.bottom + margin;
+  if (top + pickerHeight > window.innerHeight - 8) {
+    top = rect.top - pickerHeight - margin;
+    if (top < 8) top = 8;
+  }
+
+  container.style.left = left + 'px';
+  container.style.top = top + 'px';
+  container.style.right = 'auto';
+  container.style.bottom = 'auto';
 
   picker.addEventListener('emoji-click', (event) => {
     const emoji = event.detail.unicode;
@@ -1037,6 +1122,12 @@ async function sendNow() {
   if (!payload) return;
   const nb = payload.groups.length;
   if (!confirm(`Envoyer ce message maintenant a ${nb} destinataire${nb > 1 ? 's' : ''} ?`)) return;
+
+  // If current draft -> promote it
+  if (currentDraftId) {
+    const ok = await promoteCurrentDraft(null, true);
+    if (ok) { toast('Message envoye !', 'success'); resetForm(); return; }
+  }
   payload.send_now = true;
   try {
     const res = await api('/api/messages', {
@@ -1054,6 +1145,12 @@ async function scheduleMessage() {
   const payload = buildPayload();
   if (!payload) return;
   payload.scheduled_at = datetime;
+
+  // Promote draft instead of creating new message
+  if (currentDraftId && !editingMessageId) {
+    const ok = await promoteCurrentDraft(datetime, false);
+    if (ok) { toast('Message programme !', 'success'); resetForm(); return; }
+  }
 
   const url = editingMessageId ? `/api/messages/${editingMessageId}` : '/api/messages';
   const method = editingMessageId ? 'PUT' : 'POST';
@@ -1098,6 +1195,7 @@ function resetForm() {
   renderTagsSelector();
   renderGroups(); renderContacts(); renderFileList();
   editingMessageId = null;
+  currentDraftId = null;
 }
 
 // --- Queue ---
@@ -1574,6 +1672,141 @@ function formatDate(isoString) {
   if (!isoString) return '-';
   const d = new Date(isoString);
   return d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+// ==============================
+//  DRAFTS
+// ==============================
+function hasDraftableContent() {
+  const ed = document.getElementById('message-content');
+  if (!ed) return false;
+  const { text } = getEditorText(ed);
+  return text.trim().length > 0 || uploadedFiles.length > 0 || selectedGroups.length > 0 || selectedContacts.length > 0;
+}
+
+async function saveAsDraft(silent = false) {
+  if (!hasDraftableContent()) {
+    if (!silent) toast('Rien a enregistrer', 'info');
+    return null;
+  }
+  const ed = document.getElementById('message-content');
+  const { text, mentions } = getEditorText(ed);
+  const payload = {
+    groups: [...selectedGroups, ...selectedContacts],
+    content: text,
+    attachments: uploadedFiles.map(f => ({ filename: f.filename, originalname: f.originalname })),
+    notes: (document.getElementById('message-notes')?.value || '').trim(),
+    tags: [...selectedTags],
+    mentions,
+  };
+  try {
+    let res;
+    if (currentDraftId) {
+      res = await api(`/api/drafts/${currentDraftId}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+    } else {
+      res = await api('/api/drafts', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        currentDraftId = data.id;
+      }
+    }
+    if (res.ok) {
+      if (!silent) toast('Brouillon enregistre', 'success');
+      return currentDraftId;
+    } else {
+      const d = await res.json();
+      if (!silent) toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) {
+    if (!silent) toast('Erreur: ' + err.message, 'error');
+  }
+  return null;
+}
+
+function startAutoSave() {
+  if (autoSaveTimer) clearInterval(autoSaveTimer);
+  autoSaveTimer = setInterval(() => {
+    if (hasDraftableContent()) saveAsDraft(true);
+  }, 30000);
+}
+
+async function loadDrafts() {
+  try {
+    const res = await api('/api/drafts');
+    const drafts = await res.json();
+    const container = document.getElementById('drafts-list');
+    if (!drafts || drafts.length === 0) {
+      container.innerHTML = '<p class="empty">Aucun brouillon.</p>';
+      return;
+    }
+    container.innerHTML = drafts.map((d) => {
+      const tags = Array.isArray(d.tags) ? d.tags : [];
+      return `
+      <div class="queue-item">
+        <div class="queue-item-header">
+          <span class="date">${formatDate(d.created_at)}</span>
+          <span style="font-size:12px;color:var(--text-light)">#${d.id}</span>
+        </div>
+        <div class="queue-item-groups">
+          ${(d.groups || []).map((g) => `<span class="group-tag">${escapeHtml(g.name)}</span>`).join('')}
+        </div>
+        <div class="queue-item-content">${escapeHtml(d.content || '').substring(0, 200) || '<em style="color:var(--text-light)">(vide)</em>'}</div>
+        ${d.attachments && d.attachments.length ? `<div style="font-size:12px;color:var(--text-light)">&#128206; ${d.attachments.length} piece(s) jointe(s)</div>` : ''}
+        ${tags.length > 0 ? `<div class="message-tags">${tags.map(t => `<span class="message-tag" style="background:${tagColor(t)}">#${escapeHtml(t)}</span>`).join('')}</div>` : ''}
+        ${d.notes ? `<div style="font-size:12px;color:#7d6608;background:#fef9e7;padding:6px 8px;border-radius:4px;margin-top:6px">&#128221; ${escapeHtml(d.notes)}</div>` : ''}
+        <div class="queue-item-actions">
+          <button class="btn btn-sm btn-primary" onclick="editDraft(${d.id})">Reprendre</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteDraft(${d.id})">Supprimer</button>
+        </div>
+      </div>`;
+    }).join('');
+  } catch (err) { console.error('Failed to load drafts:', err); }
+}
+
+async function editDraft(id) {
+  try {
+    const res = await api('/api/drafts');
+    const drafts = await res.json();
+    const d = drafts.find(x => x.id === id);
+    if (!d) return;
+    fillComposeFromMessage(d, { keepId: false, keepDate: false });
+    currentDraftId = id;
+    toast('Brouillon charge — modifications auto-sauvegardees', 'info');
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+async function deleteDraft(id) {
+  if (!confirm('Supprimer ce brouillon ?')) return;
+  try {
+    const res = await api(`/api/drafts/${id}`, { method: 'DELETE' });
+    if (res.ok) {
+      if (currentDraftId === id) currentDraftId = null;
+      toast('Brouillon supprime', 'success');
+      loadDrafts();
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
+}
+
+// If user has a current draft and calls send/schedule, promote it instead of creating a new message
+async function promoteCurrentDraft(scheduledAt, sendNow) {
+  if (!currentDraftId) return false;
+  try {
+    // First sync draft with current form state
+    await saveAsDraft(true);
+    const res = await api(`/api/drafts/${currentDraftId}/promote`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scheduled_at: scheduledAt, send_now: !!sendNow }),
+    });
+    if (res.ok) {
+      currentDraftId = null;
+      return true;
+    }
+  } catch (_) {}
+  return false;
 }
 
 function toast(message, type = 'info') {

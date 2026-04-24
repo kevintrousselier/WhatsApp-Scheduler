@@ -363,6 +363,28 @@ body {
   margin-left: 4px;
 }
 
+.group-tag.draggable {
+  cursor: grab;
+}
+
+.group-tag.draggable:active {
+  cursor: grabbing;
+}
+
+.group-tag.dragging {
+  opacity: 0.4;
+}
+
+.group-tag.drop-target {
+  box-shadow: 0 0 0 2px var(--primary);
+}
+
+.drag-handle {
+  font-size: 10px;
+  opacity: 0.6;
+  margin-right: 2px;
+}
+
 /* Mode toggle */
 .mode-toggle {
   display: flex;
@@ -902,6 +924,20 @@ emoji-picker {
     width: 100vw;
     max-width: 340px;
   }
+}
+
+.btn-mini-refresh {
+  background: transparent;
+  border: none;
+  color: var(--primary);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 6px;
+  margin-left: 4px;
+  border-radius: 50%;
+}
+.btn-mini-refresh:hover {
+  background: var(--bg);
 }
 
 /* Preview modal (message as WhatsApp bubble) */

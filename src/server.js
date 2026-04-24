@@ -93,6 +93,12 @@ waManager.on('ready', ({ userId }) => {
 waManager.on('disconnected', ({ userId }) => {
   broadcastToUser(userId, { type: 'status', status: 'disconnected', qrCode: null });
 });
+waManager.on('groups_updated', ({ userId }) => {
+  broadcastToUser(userId, { type: 'groups_updated' });
+});
+waManager.on('contacts_updated', ({ userId }) => {
+  broadcastToUser(userId, { type: 'contacts_updated' });
+});
 
 // --- Users ---
 app.get('/api/users', (req, res) => {
@@ -269,6 +275,62 @@ app.post('/api/messages', requireUser, (req, res) => {
 
 app.get('/api/messages', requireUser, (req, res) => {
   res.json(db.getPendingMessages(req.userId));
+});
+
+// --- Drafts ---
+app.get('/api/drafts', requireUser, (req, res) => {
+  res.json(db.getDrafts(req.userId));
+});
+
+app.post('/api/drafts', requireUser, (req, res) => {
+  try {
+    const { groups, content, attachments, notes, tags, mentions } = req.body;
+    const msg = db.createMessage(req.userId, {
+      groups: groups || [],
+      content: content || '',
+      attachments: attachments || [],
+      scheduled_at: null,
+      status: 'draft',
+      notes: notes || '',
+      tags: tags || [],
+      mentions: mentions || [],
+    });
+    res.status(201).json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/drafts/:id', requireUser, (req, res) => {
+  try {
+    const { groups, content, attachments, notes, tags, mentions } = req.body;
+    const msg = db.updateDraft(parseInt(req.params.id), req.userId, { groups, content, attachments, notes, tags, mentions });
+    if (!msg) return res.status(404).json({ error: 'Draft not found' });
+    res.json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/drafts/:id', requireUser, (req, res) => {
+  const r = db.deleteDraft(parseInt(req.params.id), req.userId);
+  if (r.changes === 0) return res.status(404).json({ error: 'Draft not found' });
+  res.json({ success: true });
+});
+
+// Promote a draft to pending (schedule or immediate)
+app.post('/api/drafts/:id/promote', requireUser, (req, res) => {
+  try {
+    const { scheduled_at, send_now } = req.body;
+    const when = send_now ? localNow() : scheduled_at;
+    if (!when) return res.status(400).json({ error: 'scheduled_at or send_now required' });
+    const msg = db.promoteDraft(parseInt(req.params.id), req.userId, when);
+    if (!msg) return res.status(404).json({ error: 'Draft not found' });
+    if (send_now) scheduler.processDueMessages().catch(console.error);
+    res.json(msg);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/messages/:id', requireUser, (req, res) => {

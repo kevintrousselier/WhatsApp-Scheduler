@@ -42,6 +42,10 @@
           <span class="nav-icon">&#9997;</span>
           <span>Nouveau</span>
         </a>
+        <a href="#" class="nav-item" data-section="drafts">
+          <span class="nav-icon">&#128221;</span>
+          <span>Brouillons</span>
+        </a>
         <a href="#" class="nav-item" data-section="queue">
           <span class="nav-icon">&#128203;</span>
           <span>File d'attente</span>
@@ -98,7 +102,7 @@
           <div id="connection-overlay" class="connection-overlay hidden"></div>
 
           <div class="form-group">
-            <label>Destinataires (groupes)</label>
+            <label>Destinataires (groupes) <button type="button" class="btn-mini-refresh" onclick="manualRefreshContacts()" title="Rafraichir groupes et contacts">&#8635;</button></label>
             <div class="groups-select">
               <input type="text" id="group-search" placeholder="Rechercher un groupe..." class="input">
               <div id="groups-list" class="groups-list"></div>
@@ -181,7 +185,20 @@
                 <input type="datetime-local" id="schedule-datetime" class="input">
                 <button class="btn btn-secondary" onclick="scheduleMessage()">Programmer</button>
               </div>
+              <span class="or">ou</span>
+              <button class="btn" onclick="saveAsDraft()">Enregistrer brouillon</button>
             </div>
+          </div>
+        </section>
+
+        <!-- Section: Drafts -->
+        <section id="section-drafts" class="section hidden">
+          <div class="section-header">
+            <h2>Brouillons</h2>
+            <span style="font-size:12px;color:var(--text-light)">Auto-sauvegarde toutes les 30s quand vous redigez</span>
+          </div>
+          <div id="drafts-list" class="queue-list">
+            <p class="empty">Aucun brouillon.</p>
           </div>
         </section>
 

@@ -244,6 +244,37 @@ module.exports = {
     ).map(parseMessage);
   },
 
+  getDrafts(userId) {
+    return getAll(
+      "SELECT * FROM messages WHERE user_id = ? AND status = 'draft' ORDER BY created_at DESC",
+      [userId]
+    ).map(parseMessage);
+  },
+
+  updateDraft(id, userId, { groups, content, attachments, notes = '', tags = [], mentions = [] }) {
+    runQuery(
+      `UPDATE messages SET groups_json = ?, content = ?, attachments_json = ?, notes = ?, tags_json = ?, mentions_json = ?
+       WHERE id = ? AND user_id = ? AND status = 'draft'`,
+      [JSON.stringify(groups || []), content || '', JSON.stringify(attachments || []), notes || '', JSON.stringify(tags || []), JSON.stringify(mentions || []), id, userId]
+    );
+    return this.getMessageById(id);
+  },
+
+  deleteDraft(id, userId) {
+    const before = getOne("SELECT COUNT(*) as c FROM messages WHERE id = ? AND user_id = ? AND status = 'draft'", [id, userId]);
+    runQuery("DELETE FROM messages WHERE id = ? AND user_id = ? AND status = 'draft'", [id, userId]);
+    return { changes: before && before.c > 0 ? 1 : 0 };
+  },
+
+  // Promote a draft to pending (schedule or send now)
+  promoteDraft(id, userId, scheduled_at) {
+    runQuery(
+      "UPDATE messages SET status = 'pending', scheduled_at = ? WHERE id = ? AND user_id = ? AND status = 'draft'",
+      [scheduled_at, id, userId]
+    );
+    return this.getMessageById(id);
+  },
+
   getAllDueMessages(now) {
     return getAll(
       "SELECT * FROM messages WHERE status = 'pending' AND scheduled_at <= ?",

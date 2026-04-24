@@ -102,6 +102,19 @@ class WhatsAppClient extends EventEmitter {
       this.emit('auth_failure', { userId: this.userId, msg });
     });
 
+    // Instant sync: groups and contacts changes
+    const onGroupsChanged = () => {
+      this.loadGroups().then(() => this.emit('groups_updated', { userId: this.userId })).catch(() => {});
+    };
+    const onContactsChanged = () => {
+      this.loadContacts().then(() => this.emit('contacts_updated', { userId: this.userId })).catch(() => {});
+    };
+
+    this.client.on('group_join', onGroupsChanged);
+    this.client.on('group_leave', onGroupsChanged);
+    this.client.on('group_update', onGroupsChanged);
+    this.client.on('contact_changed', onContactsChanged);
+
     await this.client.initialize();
   }
 
@@ -248,6 +261,8 @@ class WhatsAppManager extends EventEmitter {
     client.on('ready', (data) => this.emit('ready', data));
     client.on('disconnected', (data) => this.emit('disconnected', data));
     client.on('auth_failure', (data) => this.emit('auth_failure', data));
+    client.on('groups_updated', (data) => this.emit('groups_updated', data));
+    client.on('contacts_updated', (data) => this.emit('contacts_updated', data));
 
     this.clients.set(userId, client);
 
