@@ -1213,6 +1213,10 @@ async function toggleAudioRecording() {
     audioRecorder.stop();
     return;
   }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('Enregistrement audio impossible en HTTP. HTTPS requis (domaine + SSL).', 'error');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     audioChunks = [];
@@ -1795,6 +1799,9 @@ function resetForm() {
 
   // Live preview
   updateLivePreview();
+
+  // Exit template mode if we were editing one
+  exitTemplateMode();
 }
 
 // --- Queue ---
@@ -2101,16 +2108,8 @@ function renderTemplates() {
   }).join('');
 }
 
-function showTemplateForm() {
-  document.getElementById('template-form').classList.remove('hidden');
-  document.getElementById('template-form-title').textContent = 'Nouveau template';
-  document.getElementById('template-edit-id').value = '';
-  document.getElementById('tpl-title').value = '';
-  document.getElementById('tpl-content').value = '';
-  tplAttachments = [];
-  renderTplFileList();
-  initTplDropZone();
-}
+// Legacy — kept so old calls don't break
+function showTemplateForm() { newTemplate(); }
 
 function hideTemplateForm() {
   document.getElementById('template-form').classList.add('hidden');
@@ -2177,14 +2176,99 @@ async function saveTemplate() {
 async function editTemplate(id) {
   const tpl = templates.find((t) => t.id === id);
   if (!tpl) return;
-  document.getElementById('template-form').classList.remove('hidden');
-  document.getElementById('template-form-title').textContent = 'Modifier template';
-  document.getElementById('template-edit-id').value = id;
-  document.getElementById('tpl-title').value = tpl.title;
-  document.getElementById('tpl-content').value = tpl.content;
-  tplAttachments = Array.isArray(tpl.attachments) ? [...tpl.attachments] : [];
-  renderTplFileList();
-  initTplDropZone();
+  // Pre-fill compose editor with full template
+  fillComposeFromMessage({
+    groups: [],
+    content: tpl.content,
+    attachments: tpl.attachments || [],
+    notes: tpl.notes,
+    tags: tpl.tags,
+    mentions: tpl.mentions,
+    timezone: tpl.timezone,
+    type: tpl.type,
+    poll: tpl.poll,
+    location: tpl.location,
+    recurrence: tpl.recurrence,
+  }, { keepId: false, keepDate: false });
+  enterTemplateMode(id, tpl.title);
+}
+
+function newTemplate() {
+  resetForm();
+  enterTemplateMode(null, '');
+}
+
+function enterTemplateMode(templateId, title) {
+  document.getElementById('compose-title').textContent = templateId ? 'Modifier template' : 'Nouveau template';
+  document.getElementById('template-title-block').classList.remove('hidden');
+  document.getElementById('template-save-block').classList.remove('hidden');
+  document.getElementById('send-options-block').classList.add('hidden');
+  document.getElementById('template-title').value = title || '';
+  document.getElementById('template-edit-id').value = templateId || '';
+
+  document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
+  const navCompose = document.querySelector('[data-section="compose"]');
+  if (navCompose) navCompose.classList.add('active');
+  document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
+  document.getElementById('section-compose').classList.remove('hidden');
+}
+
+function exitTemplateMode() {
+  document.getElementById('compose-title').textContent = 'Nouveau message';
+  document.getElementById('template-title-block').classList.add('hidden');
+  document.getElementById('template-save-block').classList.add('hidden');
+  document.getElementById('send-options-block').classList.remove('hidden');
+  document.getElementById('template-title').value = '';
+  document.getElementById('template-edit-id').value = '';
+}
+
+function cancelTemplateEdit() {
+  exitTemplateMode();
+  resetForm();
+  // Go back to templates section
+  document.querySelectorAll('.nav-item').forEach((n) => n.classList.remove('active'));
+  document.querySelector('[data-section="templates"]').classList.add('active');
+  document.querySelectorAll('.section').forEach((s) => s.classList.add('hidden'));
+  document.getElementById('section-templates').classList.remove('hidden');
+  loadTemplatesList();
+}
+
+async function saveTemplateFromCompose() {
+  const title = (document.getElementById('template-title').value || '').trim();
+  if (!title) { toast('Titre requis', 'error'); return; }
+  const editId = document.getElementById('template-edit-id').value;
+
+  const state = buildComposeState();
+  const notes = (document.getElementById('message-notes')?.value || '').trim();
+  const timezone = document.getElementById('message-timezone')?.value || userTimezone || 'Europe/Paris';
+  const payload = {
+    title,
+    content: state.content,
+    attachments: state.attachments,
+    tags: [...selectedTags],
+    mentions: state.mentions,
+    notes,
+    timezone,
+    type: state.location ? 'location' : (state.poll && !state.content && !state.attachments.length ? 'poll' : 'text'),
+    poll: state.poll,
+    location: state.location,
+    recurrence: getRecurrenceData(),
+  };
+
+  const url = editId ? `/api/templates/${editId}` : '/api/templates';
+  const method = editId ? 'PUT' : 'POST';
+  try {
+    const res = await api(url, {
+      method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      toast(editId ? 'Template modifie' : 'Template cree', 'success');
+      cancelTemplateEdit();
+    } else {
+      toast(data.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 async function duplicateTemplate(id) {

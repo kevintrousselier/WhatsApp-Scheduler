@@ -97,9 +97,16 @@
 
         <!-- Section: Compose -->
         <section id="section-compose" class="section hidden">
-          <h2>Nouveau message</h2>
+          <h2 id="compose-title">Nouveau message</h2>
 
           <div id="connection-overlay" class="connection-overlay hidden"></div>
+
+          <!-- Template mode title (visible only when editing/creating a template) -->
+          <div class="form-group hidden" id="template-title-block">
+            <label>Titre du template</label>
+            <input type="text" id="template-title" class="input" placeholder="Ex: Rappel J-7 Corse">
+            <input type="hidden" id="template-edit-id">
+          </div>
 
           <div class="form-group">
             <label>Destinataires (groupes) <button type="button" class="btn-mini-refresh" onclick="manualRefreshContacts()" title="Rafraichir groupes et contacts">&#8635;</button></label>
@@ -281,7 +288,7 @@
             </div>
           </div>
 
-          <div class="form-group">
+          <div class="form-group" id="send-options-block">
             <label>Envoi</label>
             <div class="send-options">
               <button class="btn btn-primary" onclick="sendNow()">Envoyer maintenant</button>
@@ -293,6 +300,13 @@
               <span class="or">ou</span>
               <button class="btn" onclick="saveAsDraft()">Enregistrer brouillon</button>
               <button class="btn" onclick="saveAsTemplate()">Enregistrer comme template</button>
+            </div>
+          </div>
+
+          <div class="form-group hidden" id="template-save-block">
+            <div class="send-options">
+              <button class="btn btn-primary" onclick="saveTemplateFromCompose()">Enregistrer le template</button>
+              <button class="btn" onclick="cancelTemplateEdit()">Annuler</button>
             </div>
           </div>
         </section>
@@ -343,47 +357,11 @@
         <section id="section-templates" class="section hidden">
           <div class="section-header">
             <h2>Templates</h2>
-            <button class="btn btn-primary" onclick="showTemplateForm()">+ Nouveau template</button>
+            <button class="btn btn-primary" onclick="newTemplate()">+ Nouveau template</button>
           </div>
-
-          <div id="template-form" class="card hidden">
-            <h3 id="template-form-title">Nouveau template</h3>
-            <input type="hidden" id="template-edit-id">
-            <div class="form-group">
-              <label>Titre</label>
-              <input type="text" id="tpl-title" class="input" placeholder="Ex: Rappel J-7 Corse">
-            </div>
-            <div class="form-group">
-              <label>Contenu</label>
-              <div class="format-toolbar" data-target="tpl-content">
-                <button type="button" class="fmt-btn" data-wrap="*" title="Gras"><b>B</b></button>
-                <button type="button" class="fmt-btn" data-wrap="_" title="Italique"><i>I</i></button>
-                <button type="button" class="fmt-btn" data-wrap="~" title="Barre"><s>S</s></button>
-                <button type="button" class="fmt-btn" data-wrap="```" title="Code">&lt;/&gt;</button>
-                <button type="button" class="fmt-btn" data-prefix="- " title="Liste">&#8226;</button>
-                <span class="fmt-separator"></span>
-                <button type="button" class="fmt-btn fmt-emoji" onclick="toggleEmojiPicker('tpl-content', this)" title="Emojis">&#128578;</button>
-              </div>
-              <div class="textarea-wrapper">
-                <textarea id="tpl-content" class="textarea" rows="5"
-                  placeholder="Contenu du template..."></textarea>
-              </div>
-            </div>
-            <div class="form-group">
-              <label>Pieces jointes (optionnel)</label>
-              <div id="tpl-drop-zone" class="drop-zone">
-                <p>Glissez vos fichiers ici ou <label for="tpl-file-input" class="link">parcourir</label></p>
-                <input type="file" id="tpl-file-input" multiple hidden accept=".pdf,.jpg,.jpeg,.png,.mp4">
-                <p class="hint">PDF, images (JPG/PNG), videos (MP4) — max 16 Mo/fichier</p>
-              </div>
-              <div id="tpl-file-list" class="file-list"></div>
-            </div>
-            <div class="form-actions">
-              <button class="btn btn-primary" onclick="saveTemplate()">Enregistrer</button>
-              <button class="btn" onclick="hideTemplateForm()">Annuler</button>
-            </div>
-          </div>
-
+          <p style="font-size:13px;color:var(--text-light);margin-bottom:14px">
+            Cliquez sur "Nouveau template" ou "Modifier" pour acceder a l'editeur complet.
+          </p>
           <div id="templates-grid" class="templates-grid"></div>
         </section>
 
