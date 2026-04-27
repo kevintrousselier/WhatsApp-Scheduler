@@ -1126,28 +1126,39 @@ function initLocationMap() {
 
   // Google Places Autocomplete on the search input
   const searchInput = document.getElementById('location-search');
-  if (searchInput && google.maps.places && google.maps.places.Autocomplete) {
+  if (searchInput) {
     if (!searchInput.dataset.autocompleteInit) {
-      const ac = new google.maps.places.Autocomplete(searchInput, {
-        fields: ['geometry', 'formatted_address', 'name'],
-      });
-      ac.bindTo('bounds', locationMap);
-      ac.addListener('place_changed', () => {
-        const place = ac.getPlace();
-        if (!place.geometry || !place.geometry.location) return;
-        const lat = place.geometry.location.lat();
-        const lng = place.geometry.location.lng();
-        locationMap.setCenter({ lat, lng });
-        locationMap.setZoom(15);
-        setLocationMarker(lat, lng, false);
-        const label = place.name && place.formatted_address && !place.formatted_address.startsWith(place.name)
-          ? `${place.name} — ${place.formatted_address}`
-          : place.formatted_address || place.name || '';
-        document.getElementById('location-info').textContent = `${label} (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
-        const descInput = document.getElementById('location-description');
-        if (descInput && !descInput.value) descInput.value = label;
-      });
-      searchInput.dataset.autocompleteInit = '1';
+      try {
+        if (!google.maps.places || !google.maps.places.Autocomplete) {
+          throw new Error('Places API non disponible (a activer dans GCP)');
+        }
+        const ac = new google.maps.places.Autocomplete(searchInput, {
+          fields: ['geometry', 'formatted_address', 'name'],
+        });
+        ac.bindTo('bounds', locationMap);
+        ac.addListener('place_changed', () => {
+          const place = ac.getPlace();
+          if (!place.geometry || !place.geometry.location) {
+            toast('Lieu introuvable. Cliquez sur la carte pour poser le pin.', 'info');
+            return;
+          }
+          const lat = place.geometry.location.lat();
+          const lng = place.geometry.location.lng();
+          locationMap.setCenter({ lat, lng });
+          locationMap.setZoom(15);
+          setLocationMarker(lat, lng, false);
+          const label = place.name && place.formatted_address && !place.formatted_address.startsWith(place.name)
+            ? `${place.name} — ${place.formatted_address}`
+            : place.formatted_address || place.name || '';
+          document.getElementById('location-info').textContent = `${label} (${lat.toFixed(5)}, ${lng.toFixed(5)})`;
+          const descInput = document.getElementById('location-description');
+          if (descInput && !descInput.value) descInput.value = label;
+        });
+        searchInput.dataset.autocompleteInit = '1';
+      } catch (err) {
+        console.warn('Places Autocomplete unavailable:', err.message);
+        searchInput.placeholder = 'Recherche manuelle (Places API non activee — utilisez le bouton Chercher)';
+      }
     }
   }
 
@@ -1869,54 +1880,97 @@ function buildPayload() {
 }
 
 function resetForm() {
-  selectedGroups = []; selectedContacts = []; uploadedFiles = [];
-  const ed = document.getElementById('message-content');
-  if (ed) ed.innerHTML = '';
-  document.getElementById('schedule-datetime').value = '';
-  document.getElementById('group-search').value = '';
-  document.getElementById('contact-search').value = '';
-  document.getElementById('message-preview').classList.add('hidden');
-  const notesEl = document.getElementById('message-notes');
-  if (notesEl) notesEl.value = '';
+  // Wrap each step in try/catch so an error in one step doesn't break the rest
+  const safe = (fn, label) => { try { fn(); } catch (e) { console.error('resetForm:' + label, e); } };
+
+  // Core state
+  selectedGroups = [];
+  selectedContacts = [];
+  uploadedFiles = [];
   selectedTags = [];
-  renderTagsSelector();
-  const tzSel = document.getElementById('message-timezone');
-  if (tzSel) tzSel.value = userTimezone || 'Europe/Paris';
-  renderGroups(); renderContacts(); renderFileList();
   editingMessageId = null;
   currentDraftId = null;
+  currentLocation = null;
 
-  // Reset add-ons
-  resetAddons();
-  resetPollForm();
-  resetLocationForm();
+  // Compose editor
+  safe(() => {
+    const ed = document.getElementById('message-content');
+    if (ed) { ed.innerHTML = ''; ed.textContent = ''; }
+  }, 'editor');
 
-  // Reset recurrence
-  const recCb = document.getElementById('enable-recurrence');
-  if (recCb) { recCb.checked = false; toggleRecurrence(); }
-  const batchRef = document.getElementById('batch-reference'); if (batchRef) batchRef.value = '';
-  const offsetList = document.getElementById('batch-offsets-list'); if (offsetList) offsetList.innerHTML = '';
-  const regularRadio = document.querySelector('input[name="recurrence-mode"][value="regular"]');
-  if (regularRadio) { regularRadio.checked = true; updateRecurrenceMode(); }
+  // Inputs
+  safe(() => { const dt = document.getElementById('schedule-datetime'); if (dt) dt.value = ''; }, 'datetime');
+  safe(() => { const el = document.getElementById('group-search'); if (el) el.value = ''; }, 'group-search');
+  safe(() => { const el = document.getElementById('contact-search'); if (el) el.value = ''; }, 'contact-search');
+  safe(() => { const el = document.getElementById('message-preview'); if (el) el.classList.add('hidden'); }, 'preview');
+  safe(() => { const el = document.getElementById('message-notes'); if (el) el.value = ''; }, 'notes');
+  safe(() => { const tz = document.getElementById('message-timezone'); if (tz) tz.value = userTimezone || 'Europe/Paris'; }, 'tz');
+  safe(() => { const fi = document.getElementById('file-input'); if (fi) fi.value = ''; }, 'file-input');
+  safe(() => { const fl = document.getElementById('file-list'); if (fl) fl.innerHTML = ''; }, 'file-list');
+
+  // Tags
+  safe(() => renderTagsSelector(), 'tags');
+
+  // Lists
+  safe(() => renderGroups(), 'groups');
+  safe(() => renderContacts(), 'contacts');
+  safe(() => renderFileList(), 'files');
+
+  // Add-ons
+  safe(() => {
+    ['attachments', 'poll', 'location'].forEach(t => {
+      activeAddons[t] = false;
+      const el = document.getElementById('addon-' + t);
+      if (el) el.classList.add('hidden');
+    });
+  }, 'addons');
+
+  // Poll
+  safe(() => {
+    const q = document.getElementById('poll-question'); if (q) q.value = '';
+    const m = document.getElementById('poll-multi'); if (m) m.checked = false;
+    const o = document.getElementById('poll-options'); if (o) o.innerHTML = '';
+  }, 'poll');
+
+  // Location
+  safe(() => {
+    const s = document.getElementById('location-search'); if (s) s.value = '';
+    const d = document.getElementById('location-description'); if (d) d.value = '';
+    const i = document.getElementById('location-info'); if (i) i.textContent = '';
+    if (locationMarker) { try { locationMarker.setMap(null); } catch (_) {} locationMarker = null; }
+  }, 'location');
+
+  // Recurrence
+  safe(() => {
+    const recCb = document.getElementById('enable-recurrence');
+    if (recCb) { recCb.checked = false; toggleRecurrence(); }
+    const batchRef = document.getElementById('batch-reference'); if (batchRef) batchRef.value = '';
+    const offsetList = document.getElementById('batch-offsets-list'); if (offsetList) offsetList.innerHTML = '';
+    const regularRadio = document.querySelector('input[name="recurrence-mode"][value="regular"]');
+    if (regularRadio) { regularRadio.checked = true; updateRecurrenceMode(); }
+  }, 'recurrence');
 
   // Quick schedule
-  renderQuickSchedule();
+  safe(() => renderQuickSchedule(), 'quick-schedule');
 
   // Live preview
-  updateLivePreview();
+  safe(() => updateLivePreview(), 'live-preview');
 
-  // Exit template mode if we were editing one
-  exitTemplateMode();
+  // Exit template mode
+  safe(() => exitTemplateMode(), 'template-mode');
 
-  // Reset audio preview
-  if (recordedAudioBlobUrl) { URL.revokeObjectURL(recordedAudioBlobUrl); recordedAudioBlobUrl = null; }
-  recordedAudioFile = null;
-  const ap = document.getElementById('audio-preview');
-  if (ap) ap.classList.add('hidden');
-  const app = document.getElementById('audio-preview-player');
-  if (app) app.src = '';
-  const ar = document.getElementById('audio-recorder');
-  if (ar) ar.classList.add('hidden');
+  // Audio preview
+  safe(() => {
+    if (recordedAudioBlobUrl) { URL.revokeObjectURL(recordedAudioBlobUrl); recordedAudioBlobUrl = null; }
+    recordedAudioFile = null;
+    const ap = document.getElementById('audio-preview'); if (ap) ap.classList.add('hidden');
+    const app = document.getElementById('audio-preview-player'); if (app) app.src = '';
+    const ar = document.getElementById('audio-recorder'); if (ar) ar.classList.add('hidden');
+    const btnA = document.getElementById('btn-record-audio');
+    if (btnA) { btnA.classList.remove('recording'); btnA.textContent = '🎤 Enregistrer un message audio'; }
+  }, 'audio');
+
+  console.log('[resetForm] done');
 }
 
 // --- Queue ---
