@@ -218,10 +218,34 @@ class WhatsAppClient extends EventEmitter {
     const lng = Number(longitude);
     if (isNaN(lat) || isNaN(lng)) throw new Error(`Invalid coordinates: ${latitude}, ${longitude}`);
     const name = (description || '').trim() || 'Localisation';
-    // Use explicit options form (newer whatsapp-web.js API)
-    const loc = new Location(lat, lng, { name, address: name });
+    const mapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
+
     console.log(`[WhatsApp:${this.userId}] sendLocation to ${recipientId}: ${lat}, ${lng} — ${name}`);
-    return this.client.sendMessage(recipientId, loc);
+
+    // Try multiple Location constructor forms (different whatsapp-web.js versions)
+    const attempts = [
+      () => new Location(lat, lng, { name, address: name, url: mapsUrl }),
+      () => new Location(lat, lng, name),
+      () => new Location(lat, lng),
+    ];
+
+    let lastErr = null;
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        const loc = attempts[i]();
+        const result = await this.client.sendMessage(recipientId, loc);
+        console.log(`[WhatsApp:${this.userId}] Location sent (form #${i + 1})`);
+        return result;
+      } catch (err) {
+        lastErr = err;
+        console.warn(`[WhatsApp:${this.userId}] Location form #${i + 1} failed: ${err.message}`);
+      }
+    }
+
+    // Fallback: send as text with the Google Maps link
+    console.warn(`[WhatsApp:${this.userId}] All Location forms failed, falling back to text message`);
+    const fallbackText = `📍 ${name}\n${mapsUrl}`;
+    return this.client.sendMessage(recipientId, fallbackText);
   }
 
   _cleanLocks(dir) {
