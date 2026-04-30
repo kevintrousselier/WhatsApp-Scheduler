@@ -137,19 +137,17 @@ class WhatsAppClient extends EventEmitter {
     }
   }
 
-  async _loadContactsWithRetry(attempt = 1, maxAttempts = 3) {
+  async _loadContactsWithRetry(attempt = 1, maxAttempts = 2) {
     try {
-      // Wait a bit before each attempt (let WA Web settle)
       await new Promise(r => setTimeout(r, attempt === 1 ? 5000 : 30000));
       await this.loadContacts();
-      // Notify UI that contacts are ready
       this.emit('contacts_updated', { userId: this.userId });
     } catch (err) {
       console.warn(`[WhatsApp:${this.userId}] loadContacts attempt ${attempt}/${maxAttempts} failed:`, err.message);
       if (attempt < maxAttempts) {
         this._loadContactsWithRetry(attempt + 1, maxAttempts);
       } else {
-        console.error(`[WhatsApp:${this.userId}] Giving up on loading contacts. App will work but contacts list will be empty.`);
+        console.error(`[WhatsApp:${this.userId}] Contacts unavailable. App still usable for groups.`);
       }
     }
   }
