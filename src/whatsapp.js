@@ -140,9 +140,23 @@ class WhatsAppClient extends EventEmitter {
       this.touchActivity();
       const contacts = await this.client.getContacts();
       this.contacts = contacts
-        .filter((c) => c.isMyContact && !c.isGroup && !c.isMe && c.id._serialized.endsWith('@c.us'))
-        .map((c) => ({ id: c.id._serialized, name: c.name || c.pushname || c.number, number: c.number }));
-      console.log(`[WhatsApp:${this.userId}] Loaded ${this.contacts.length} contacts`);
+        .filter((c) => {
+          if (!c.id || !c.id._serialized) return false;
+          if (!c.id._serialized.endsWith('@c.us')) return false;
+          if (c.isGroup) return false;
+          if (c.isMe) return false;
+          // Keep "my contacts" (saved in phone) OR contacts with a name
+          const hasName = c.name || c.pushname;
+          // isMyContact may be undefined in newer versions — fallback to having a name
+          const isMy = c.isMyContact === true;
+          return isMy || (hasName && hasName.length > 0);
+        })
+        .map((c) => ({
+          id: c.id._serialized,
+          name: c.name || c.pushname || c.number || c.id.user,
+          number: c.number || c.id.user,
+        }));
+      console.log(`[WhatsApp:${this.userId}] Loaded ${this.contacts.length} contacts (raw: ${contacts.length})`);
     } catch (err) {
       console.error(`[WhatsApp:${this.userId}] Failed to load contacts:`, err.message);
     }
@@ -241,11 +255,8 @@ class WhatsAppClient extends EventEmitter {
         console.warn(`[WhatsApp:${this.userId}] Location form #${i + 1} failed: ${err.message}`);
       }
     }
-
-    // Fallback: send as text with the Google Maps link
-    console.warn(`[WhatsApp:${this.userId}] All Location forms failed, falling back to text message`);
-    const fallbackText = `📍 ${name}\n${mapsUrl}`;
-    return this.client.sendMessage(recipientId, fallbackText);
+    // No text fallback — let the error propagate so message status = error
+    throw lastErr || new Error('Location send failed (all forms)');
   }
 
   _cleanLocks(dir) {
