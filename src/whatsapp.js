@@ -35,8 +35,8 @@ class WhatsAppClient extends EventEmitter {
 
     const puppeteerOpts = {
       headless: true,
-      protocolTimeout: 180000,
-      timeout: 120000,
+      protocolTimeout: 360000,
+      timeout: 180000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -77,8 +77,10 @@ class WhatsAppClient extends EventEmitter {
       this.qrCode = null;
       console.log(`[WhatsApp:${this.userId}] Client ready`);
       await this.loadGroups();
-      await this.loadContacts();
       this.emit('ready', { userId: this.userId });
+      // Load contacts in the background — don't block the ready state
+      // Many contacts can take 1-3 minutes; retry on timeout
+      this._loadContactsWithRetry();
     });
 
     this.client.on('disconnected', (reason) => {
@@ -132,6 +134,23 @@ class WhatsAppClient extends EventEmitter {
       console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups`);
     } catch (err) {
       console.error(`[WhatsApp:${this.userId}] Failed to load groups:`, err.message);
+    }
+  }
+
+  async _loadContactsWithRetry(attempt = 1, maxAttempts = 3) {
+    try {
+      // Wait a bit before each attempt (let WA Web settle)
+      await new Promise(r => setTimeout(r, attempt === 1 ? 5000 : 30000));
+      await this.loadContacts();
+      // Notify UI that contacts are ready
+      this.emit('contacts_updated', { userId: this.userId });
+    } catch (err) {
+      console.warn(`[WhatsApp:${this.userId}] loadContacts attempt ${attempt}/${maxAttempts} failed:`, err.message);
+      if (attempt < maxAttempts) {
+        this._loadContactsWithRetry(attempt + 1, maxAttempts);
+      } else {
+        console.error(`[WhatsApp:${this.userId}] Giving up on loading contacts. App will work but contacts list will be empty.`);
+      }
     }
   }
 
