@@ -1840,17 +1840,7 @@ function buildComposeState() {
   }
   if (activeAddons.location) {
     const l = getLocationData();
-    if (l) {
-      location = l;
-      // Auto-insert Maps link if checkbox checked
-      const insertLink = document.getElementById('location-insert-link')?.checked;
-      if (insertLink) {
-        const link = googleMapsLink(l.latitude, l.longitude);
-        if (!content.includes(link)) {
-          content = (content ? content + '\n\n' : '') + link;
-        }
-      }
-    }
+    if (l) location = l;
   }
 
   return { content, mentions, attachments, poll, location };

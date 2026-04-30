@@ -30,42 +30,14 @@ async function sendMessageToGroup(waClient, message, group, attempt = 1) {
     if (type === 'poll' && message.poll) {
       if (content) await waClient.sendMessage(group.id, content, mentionsOpt);
       console.log(`[Scheduler] Sending poll to ${group.name}: "${message.poll.question}"`);
-      try {
-        await waClient.sendPoll(group.id, message.poll);
-      } catch (pollErr) {
-        // Fallback: send as formatted text
-        console.warn(`[Scheduler] Poll send failed, falling back to text: ${pollErr.message}`);
-        const pollText = `📊 *${message.poll.question}*\n\n` +
-          message.poll.options.map((o, i) => `${i + 1}. ${o}`).join('\n') +
-          (message.poll.allowMultipleAnswers ? '\n\n_(Plusieurs reponses autorisees)_' : '');
-        await waClient.sendMessage(group.id, pollText);
-      }
+      await waClient.sendPoll(group.id, message.poll);
     } else if (type === 'location') {
-      if (!message.location) {
-        throw new Error('Location data is missing');
-      }
-      console.log(`[Scheduler] Sending location to ${group.name}:`, JSON.stringify(message.location));
-      // RELIABLE: Send as text message with Google Maps link.
-      // The Location class in whatsapp-web.js silently fails on some WA versions.
-      const lat = message.location.latitude;
-      const lng = message.location.longitude;
-      const desc = (message.location.description || '').trim();
-      const mapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
-      let locationText = '';
-      if (content && content.includes(mapsUrl)) {
-        locationText = content; // user already inserted the link
-      } else if (content) {
-        locationText = `${content}\n\n📍 ${desc ? desc + '\n' : ''}${mapsUrl}`;
-      } else {
-        locationText = `📍 ${desc ? desc + '\n' : ''}${mapsUrl}`;
-      }
-      await waClient.sendMessage(group.id, locationText, mentionsOpt);
-      // Try the native Location too as a bonus, but ignore failures
-      try {
+      if (!message.location) throw new Error('Location data is missing');
+      console.log(`[Scheduler] Sending native location to ${group.name}:`, JSON.stringify(message.location));
+      await waClient.sendLocation(group.id, message.location);
+      if (content) {
         await sleep(800);
-        await waClient.sendLocation(group.id, message.location);
-      } catch (e) {
-        console.warn(`[Scheduler] Native Location send failed (text version was sent): ${e.message}`);
+        await waClient.sendMessage(group.id, content, mentionsOpt);
       }
     } else if (message.poll && (hasAttachments || content)) {
       // Text/attachments + poll as add-on: send text/attachments first, then poll
