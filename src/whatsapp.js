@@ -139,24 +139,48 @@ class WhatsAppClient extends EventEmitter {
     try {
       this.touchActivity();
       const contacts = await this.client.getContacts();
+
+      // Diagnostic logs
+      const stats = {
+        total: contacts.length,
+        withCusSuffix: 0,
+        withName: 0,
+        isMyContact: 0,
+        isWAContact: 0,
+        groups: 0,
+        me: 0,
+      };
+      contacts.forEach((c) => {
+        if (c.id && c.id._serialized && c.id._serialized.endsWith('@c.us')) stats.withCusSuffix++;
+        if (c.name || c.pushname) stats.withName++;
+        if (c.isMyContact === true) stats.isMyContact++;
+        if (c.isWAContact === true) stats.isWAContact++;
+        if (c.isGroup) stats.groups++;
+        if (c.isMe) stats.me++;
+      });
+      console.log(`[WhatsApp:${this.userId}] Contacts diagnostic:`, JSON.stringify(stats));
+
       this.contacts = contacts
         .filter((c) => {
           if (!c.id || !c.id._serialized) return false;
           if (!c.id._serialized.endsWith('@c.us')) return false;
           if (c.isGroup) return false;
           if (c.isMe) return false;
-          // Keep "my contacts" (saved in phone) OR contacts with a name
-          const hasName = c.name || c.pushname;
-          // isMyContact may be undefined in newer versions — fallback to having a name
-          const isMy = c.isMyContact === true;
-          return isMy || (hasName && hasName.length > 0);
+          // Permissive: keep all WA contacts that have an identifier
+          // (name OR pushname OR number, otherwise skip the bot/non-existent ones)
+          const hasIdentifier = !!(c.name || c.pushname || c.number);
+          return hasIdentifier;
         })
         .map((c) => ({
           id: c.id._serialized,
           name: c.name || c.pushname || c.number || c.id.user,
           number: c.number || c.id.user,
         }));
+      // Sort alphabetically
+      this.contacts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       console.log(`[WhatsApp:${this.userId}] Loaded ${this.contacts.length} contacts (raw: ${contacts.length})`);
+      // Log first 3 for sanity
+      this.contacts.slice(0, 3).forEach((c, i) => console.log(`  contact[${i}]: ${c.name} - ${c.number}`));
     } catch (err) {
       console.error(`[WhatsApp:${this.userId}] Failed to load contacts:`, err.message);
     }
