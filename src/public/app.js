@@ -1022,11 +1022,23 @@ function setMessageType(type) {
 }
 
 // ==============================
-//  ADD-ONS (attachments, audio, poll, location)
+//  ADD-ONS (attachments, audio, poll, location) — mutually EXCLUSIVE
 // ==============================
 const activeAddons = { attachments: false, poll: false, location: false };
 
 function addAddon(type) {
+  // Enforce mutual exclusivity: remove any other active add-on first
+  Object.keys(activeAddons).forEach(t => {
+    if (t !== type && activeAddons[t]) removeAddon(t);
+  });
+  // Audio is part of attachments; if audio was recorded, removing attachments clears it
+  if (type !== 'attachments' && (recordedAudioFile || uploadedFiles.length > 0)) {
+    if (!confirm('Cela retirera vos fichiers/audio actuels. Continuer ?')) return;
+    uploadedFiles = [];
+    deleteRecordedAudio();
+    renderFileList();
+  }
+
   activeAddons[type] = true;
   const el = document.getElementById('addon-' + type);
   if (el) el.classList.remove('hidden');
@@ -1043,12 +1055,34 @@ function addAddon(type) {
   }
 }
 
+// When user clicks Audio (recording), make it exclusive too
+function tryRecordAudio() {
+  // Audio replaces other add-ons
+  if (activeAddons.poll || activeAddons.location) {
+    if (!confirm('Cela retirera votre sondage/localisation actuel. Continuer ?')) return;
+    if (activeAddons.poll) removeAddon('poll');
+    if (activeAddons.location) removeAddon('location');
+  }
+  // Make sure attachments addon is open (audio shows there)
+  activeAddons.attachments = true;
+  const att = document.getElementById('addon-attachments');
+  if (att) att.classList.remove('hidden');
+
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    toast('Enregistrement micro indisponible en HTTP. Uploadez un fichier audio (MP3/OGG/M4A/WAV) via "Fichier".', 'info');
+    setTimeout(() => document.getElementById('file-input')?.click(), 200);
+    return;
+  }
+  toggleAudioRecording();
+}
+
 function removeAddon(type) {
   activeAddons[type] = false;
   const el = document.getElementById('addon-' + type);
   if (el) el.classList.add('hidden');
   if (type === 'attachments') {
-    uploadedFiles = uploadedFiles.filter(f => !f.voice);
+    uploadedFiles = [];
+    deleteRecordedAudio();
     renderFileList();
   } else if (type === 'poll') {
     resetPollForm();
@@ -1058,7 +1092,11 @@ function removeAddon(type) {
 }
 
 function resetAddons() {
-  ['attachments', 'poll', 'location'].forEach(t => removeAddon(t));
+  ['attachments', 'poll', 'location'].forEach(t => {
+    activeAddons[t] = false;
+    const el = document.getElementById('addon-' + t);
+    if (el) el.classList.add('hidden');
+  });
 }
 
 // ==============================
@@ -1247,17 +1285,6 @@ function resetLocationForm() {
 // ==============================
 //  AUDIO RECORDING (webm -> server-side opus)
 // ==============================
-function tryRecordAudio() {
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    toast('Enregistrement micro indisponible en HTTP. Uploadez un fichier audio (MP3/OGG/M4A/WAV) via "Fichier".', 'info');
-    // Open attachments panel to help
-    addAddon('attachments');
-    setTimeout(() => document.getElementById('file-input')?.click(), 200);
-    return;
-  }
-  toggleAudioRecording();
-}
-
 function formatTimer(ms) {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
