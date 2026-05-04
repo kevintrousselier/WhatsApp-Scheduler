@@ -177,8 +177,14 @@ app.get('/api/status', requireUser, (req, res) => {
 
 app.post('/api/connect', requireUser, async (req, res) => {
   try {
-    await waManager.getOrCreateClient(req.userId);
-    res.json({ success: true, message: 'Client initializing' });
+    // Wait up to 30s for client to reach a stable state (qr/ready/disconnected)
+    const client = await waManager.getOrCreateClient(req.userId, 30000);
+    const status = client.getStatus();
+    res.json({
+      success: true,
+      status: status.status,
+      qrCode: status.qrCode || null,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -200,9 +206,21 @@ app.get('/api/groups', requireUser, (req, res) => {
   res.json(client ? client.getGroups() : []);
 });
 
-app.get('/api/contacts', requireUser, (req, res) => {
+// Lazy contact loading: triggers actual load on first call, cached afterwards
+app.get('/api/contacts', requireUser, async (req, res) => {
   const client = waManager.getClient(req.userId);
-  res.json(client ? client.getContacts() : []);
+  if (!client) return res.json([]);
+  if (client.getStatus().status !== 'ready') return res.json([]);
+  // Trigger load if not already loaded
+  if (!client.contactsLoaded && !client.contactsLoading) {
+    // Fire and forget — UI will poll or use SSE 'contacts_updated' event
+    client.loadContacts().catch((err) => console.warn('Lazy loadContacts failed:', err.message));
+  }
+  res.json({
+    contacts: client.getContacts(),
+    loaded: client.contactsLoaded,
+    loading: client.contactsLoading,
+  });
 });
 
 // Group participants (for @mentions)
@@ -265,7 +283,8 @@ app.post('/api/refresh', requireUser, async (req, res) => {
   }
   try {
     await client.loadGroups();
-    await client.loadContacts();
+    // Force reload contacts
+    await client.loadContacts(true);
     res.json({
       success: true,
       groups: client.getGroups().length,

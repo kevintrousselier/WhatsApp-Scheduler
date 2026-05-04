@@ -209,9 +209,25 @@ async function selectProfile(userId, silent = false) {
   // Connect SSE for this user
   initSSE();
 
-  // Trigger WhatsApp connection, then poll for QR
-  api('/api/connect', { method: 'POST' }).catch(() => {});
-  pollForQR();
+  // Trigger WhatsApp connection — server waits up to 30s for QR or ready
+  api('/api/connect', { method: 'POST' }).then(async (res) => {
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.status === 'qr' && data.qrCode) {
+      showQRCode(data.qrCode);
+      updateStatusBadge('qr');
+    } else if (data.status === 'ready') {
+      hideQRCode();
+      updateStatusBadge('ready');
+      loadGroups();
+      loadContacts();
+    } else {
+      updateStatusBadge(data.status || 'disconnected');
+    }
+  }).catch((err) => {
+    console.error('connect failed:', err);
+    updateStatusBadge('disconnected');
+  });
 
   // Load data
   loadGroups();
@@ -299,29 +315,9 @@ function initSSE() {
   };
 }
 
-let qrPollTimer = null;
-function pollForQR() {
-  if (qrPollTimer) clearInterval(qrPollTimer);
-  let attempts = 0;
-  qrPollTimer = setInterval(async () => {
-    attempts++;
-    if (attempts > 20 || !currentUserId) { clearInterval(qrPollTimer); return; }
-    try {
-      const res = await api('/api/status');
-      const st = await res.json();
-      updateStatusBadge(st.status);
-      if (st.qrCode) {
-        showQRCode(st.qrCode);
-        clearInterval(qrPollTimer);
-      } else if (st.status === 'ready') {
-        hideQRCode();
-        loadGroups();
-        loadContacts();
-        clearInterval(qrPollTimer);
-      }
-    } catch (err) { /* ignore */ }
-  }, 3000);
-}
+// pollForQR removed — relying on SSE for real-time status updates.
+// Kept as a no-op for backward compatibility with any inline calls.
+function pollForQR() { /* no-op: SSE handles status updates */ }
 
 function updateStatusBadge(status) {
   const badge = document.getElementById('wa-status');
@@ -440,7 +436,16 @@ async function loadContacts() {
   showLoading('contacts-list', 'Chargement des contacts...');
   try {
     const res = await api('/api/contacts');
-    contacts = await res.json();
+    const data = await res.json();
+    // Backend now returns { contacts, loaded, loading } or [] (legacy)
+    if (Array.isArray(data)) {
+      contacts = data;
+    } else {
+      contacts = data.contacts || [];
+      if (!data.loaded && data.loading) {
+        showLoading('contacts-list', 'Chargement des contacts en arriere-plan... (peut prendre 1-2 min)');
+      }
+    }
     renderContacts();
   } catch (err) { console.error('Failed to load contacts:', err); }
 }

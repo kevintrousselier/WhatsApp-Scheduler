@@ -12,8 +12,11 @@ class WhatsAppClient extends EventEmitter {
     this.qrCode = null;
     this.groups = [];
     this.contacts = [];
+    this.contactsLoaded = false;
+    this.contactsLoading = false;
     this.destroyed = false;
     this.lastActivityAt = Date.now();
+    this._readyResolvers = [];
   }
 
   touchActivity() {
@@ -24,13 +27,37 @@ class WhatsAppClient extends EventEmitter {
     return (Date.now() - this.lastActivityAt) > maxIdleMs;
   }
 
+  // Wait until status is qr|ready|disconnected (with reason!=destroyed) or timeout
+  waitUntilStable(timeoutMs = 30000) {
+    return new Promise((resolve) => {
+      if (this.destroyed) return resolve(this.status);
+      if (this.status === 'qr' || this.status === 'ready' || this.status === 'disconnected') {
+        return resolve(this.status);
+      }
+      const timer = setTimeout(() => {
+        this._readyResolvers = this._readyResolvers.filter(r => r !== resolveOnce);
+        resolve(this.status);
+      }, timeoutMs);
+      const resolveOnce = (s) => {
+        clearTimeout(timer);
+        resolve(s);
+      };
+      this._readyResolvers.push(resolveOnce);
+    });
+  }
+
+  _resolveWaiters() {
+    const waiters = this._readyResolvers;
+    this._readyResolvers = [];
+    waiters.forEach(r => r(this.status));
+  }
+
   async initialize() {
     this.status = 'connecting';
 
     const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(this.userId));
     if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
-    // Clean up Chromium lock files recursively to prevent "profile in use" errors
     this._cleanLocks(sessionPath);
 
     const puppeteerOpts = {
@@ -40,14 +67,14 @@ class WhatsAppClient extends EventEmitter {
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
         '--disable-gpu',
         '--disable-extensions',
         '--disable-software-rasterizer',
-        '--shm-size=512mb',
+        '--disable-background-timer-throttling',
+        '--disable-renderer-backgrounding',
+        '--disable-backgrounding-occluded-windows',
       ],
     };
-    // Use system Chromium if set (Docker)
     if (process.env.PUPPETEER_EXECUTABLE_PATH) {
       puppeteerOpts.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
     }
@@ -63,6 +90,7 @@ class WhatsAppClient extends EventEmitter {
       this.qrCode = qr;
       this.emit('qr', { userId: this.userId, qrCode: qr });
       console.log(`[WhatsApp:${this.userId}] QR code received`);
+      this._resolveWaiters();
     });
 
     this.client.on('authenticated', () => {
@@ -76,136 +104,107 @@ class WhatsAppClient extends EventEmitter {
       this.status = 'ready';
       this.qrCode = null;
       console.log(`[WhatsApp:${this.userId}] Client ready`);
-      await this.loadGroups();
+      // Load groups (fast). Contacts are LAZY (loaded on demand).
+      try {
+        await this.loadGroups();
+      } catch (e) {
+        console.warn(`[WhatsApp:${this.userId}] loadGroups error (non-blocking):`, e.message);
+      }
       this.emit('ready', { userId: this.userId });
-      // Load contacts in the background — don't block the ready state
-      // Many contacts can take 1-3 minutes; retry on timeout
-      this._loadContactsWithRetry();
+      this._resolveWaiters();
     });
 
     this.client.on('disconnected', (reason) => {
       this.status = 'disconnected';
       console.log(`[WhatsApp:${this.userId}] Disconnected:`, reason);
       this.emit('disconnected', { userId: this.userId, reason });
-      // Don't auto-reconnect if we manually destroyed the client
-      if (this.destroyed) return;
-      setTimeout(() => {
-        if (this.destroyed) return;
-        console.log(`[WhatsApp:${this.userId}] Attempting reconnection...`);
-        this.initialize().catch((err) =>
-          console.error(`[WhatsApp:${this.userId}] Reconnection failed:`, err.message)
-        );
-      }, 5000);
+      this._resolveWaiters();
+      // No more auto-reconnect — let user trigger reconnection explicitly via /api/reconnect
+      // This avoids race with scheduler retries
     });
 
     this.client.on('auth_failure', (msg) => {
       this.status = 'disconnected';
       console.error(`[WhatsApp:${this.userId}] Auth failure:`, msg);
       this.emit('auth_failure', { userId: this.userId, msg });
+      this._resolveWaiters();
     });
 
-    // Instant sync: groups and contacts changes
+    // Instant sync via WhatsApp events (only groups; contacts are lazy)
     const onGroupsChanged = () => {
       this.loadGroups().then(() => this.emit('groups_updated', { userId: this.userId })).catch(() => {});
     };
-    const onContactsChanged = () => {
-      this.loadContacts().then(() => this.emit('contacts_updated', { userId: this.userId })).catch(() => {});
-    };
-
     this.client.on('group_join', onGroupsChanged);
     this.client.on('group_leave', onGroupsChanged);
     this.client.on('group_update', onGroupsChanged);
-    this.client.on('contact_changed', onContactsChanged);
 
-    await this.client.initialize();
+    // Initialize with timeout protection
+    const initPromise = this.client.initialize();
+    return Promise.race([
+      initPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('initialize() timeout 180s')), 180000)),
+    ]).catch((err) => {
+      console.error(`[WhatsApp:${this.userId}] initialize failed:`, err.message);
+      this.status = 'disconnected';
+      this._resolveWaiters();
+      throw err;
+    });
   }
 
   async loadGroups() {
-    try {
-      this.touchActivity();
-      const chats = await this.client.getChats();
-      this.groups = chats
-        .filter((chat) => chat.isGroup)
-        .map((chat) => ({
-          id: chat.id._serialized,
-          name: chat.name,
-          participants: chat.groupMetadata?.participants?.length || 0,
-        }));
-      console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups`);
-    } catch (err) {
-      console.error(`[WhatsApp:${this.userId}] Failed to load groups:`, err.message);
-    }
+    this.touchActivity();
+    const chats = await this.client.getChats();
+    this.groups = chats
+      .filter((chat) => chat.isGroup)
+      .map((chat) => ({
+        id: chat.id._serialized,
+        name: chat.name,
+        participants: chat.groupMetadata?.participants?.length || 0,
+      }));
+    console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups`);
   }
 
-  async _loadContactsWithRetry(attempt = 1, maxAttempts = 2) {
-    try {
-      await new Promise(r => setTimeout(r, attempt === 1 ? 5000 : 30000));
-      await this.loadContacts();
-      this.emit('contacts_updated', { userId: this.userId });
-    } catch (err) {
-      console.warn(`[WhatsApp:${this.userId}] loadContacts attempt ${attempt}/${maxAttempts} failed:`, err.message);
-      if (attempt < maxAttempts) {
-        this._loadContactsWithRetry(attempt + 1, maxAttempts);
-      } else {
-        console.error(`[WhatsApp:${this.userId}] Contacts unavailable. App still usable for groups.`);
-      }
+  // Lazy contact load — called only on demand
+  async loadContacts(force = false) {
+    if (this.contactsLoading) {
+      // Another caller is already loading — wait for it
+      while (this.contactsLoading) await new Promise(r => setTimeout(r, 200));
+      return;
     }
-  }
-
-  async loadContacts() {
+    if (this.contactsLoaded && !force) return;
+    this.contactsLoading = true;
     try {
       this.touchActivity();
+      console.log(`[WhatsApp:${this.userId}] Loading contacts (this can take a while)...`);
       const contacts = await this.client.getContacts();
-
-      // Diagnostic logs
-      const stats = {
-        total: contacts.length,
-        withCusSuffix: 0,
-        withName: 0,
-        isMyContact: 0,
-        isWAContact: 0,
-        groups: 0,
-        me: 0,
-      };
-      contacts.forEach((c) => {
-        if (c.id && c.id._serialized && c.id._serialized.endsWith('@c.us')) stats.withCusSuffix++;
-        if (c.name || c.pushname) stats.withName++;
-        if (c.isMyContact === true) stats.isMyContact++;
-        if (c.isWAContact === true) stats.isWAContact++;
-        if (c.isGroup) stats.groups++;
-        if (c.isMe) stats.me++;
-      });
-      console.log(`[WhatsApp:${this.userId}] Contacts diagnostic:`, JSON.stringify(stats));
-
       this.contacts = contacts
         .filter((c) => {
           if (!c.id || !c.id._serialized) return false;
           if (!c.id._serialized.endsWith('@c.us')) return false;
           if (c.isGroup) return false;
           if (c.isMe) return false;
-          // Permissive: keep all WA contacts that have an identifier
-          // (name OR pushname OR number, otherwise skip the bot/non-existent ones)
-          const hasIdentifier = !!(c.name || c.pushname || c.number);
-          return hasIdentifier;
+          return !!(c.name || c.pushname || c.number);
         })
         .map((c) => ({
           id: c.id._serialized,
           name: c.name || c.pushname || c.number || c.id.user,
           number: c.number || c.id.user,
         }));
-      // Sort alphabetically
       this.contacts.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      this.contactsLoaded = true;
       console.log(`[WhatsApp:${this.userId}] Loaded ${this.contacts.length} contacts (raw: ${contacts.length})`);
-      // Log first 3 for sanity
-      this.contacts.slice(0, 3).forEach((c, i) => console.log(`  contact[${i}]: ${c.name} - ${c.number}`));
+      this.emit('contacts_updated', { userId: this.userId });
     } catch (err) {
       console.error(`[WhatsApp:${this.userId}] Failed to load contacts:`, err.message);
+      throw err;
+    } finally {
+      this.contactsLoading = false;
     }
   }
 
   getGroups() { return this.groups; }
   getContacts() { return this.contacts; }
-  getStatus() { return { status: this.status, qrCode: this.qrCode }; }
+  getStatus() { return { status: this.status, qrCode: this.qrCode, contactsLoaded: this.contactsLoaded }; }
 
   async getGroupParticipants(groupId) {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');
@@ -273,35 +272,12 @@ class WhatsAppClient extends EventEmitter {
     const lng = Number(longitude);
     if (isNaN(lat) || isNaN(lng)) throw new Error(`Invalid coordinates: ${latitude}, ${longitude}`);
     const name = (description || '').trim() || 'Localisation';
-    const mapsUrl = `https://maps.google.com/?q=${lat},${lng}`;
-
-    console.log(`[WhatsApp:${this.userId}] sendLocation to ${recipientId}: ${lat}, ${lng} — ${name}`);
-
-    // Try multiple Location constructor forms (different whatsapp-web.js versions)
-    const attempts = [
-      () => new Location(lat, lng, { name, address: name, url: mapsUrl }),
-      () => new Location(lat, lng, name),
-      () => new Location(lat, lng),
-    ];
-
-    let lastErr = null;
-    for (let i = 0; i < attempts.length; i++) {
-      try {
-        const loc = attempts[i]();
-        const result = await this.client.sendMessage(recipientId, loc);
-        console.log(`[WhatsApp:${this.userId}] Location sent (form #${i + 1})`);
-        return result;
-      } catch (err) {
-        lastErr = err;
-        console.warn(`[WhatsApp:${this.userId}] Location form #${i + 1} failed: ${err.message}`);
-      }
-    }
-    // No text fallback — let the error propagate so message status = error
-    throw lastErr || new Error('Location send failed (all forms)');
+    const loc = new Location(lat, lng, { name, address: name });
+    return this.client.sendMessage(recipientId, loc);
   }
 
   _cleanLocks(dir) {
-    const LOCK_NAMES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie', '.org.chromium.Chromium.*'];
+    const LOCK_NAMES = ['SingletonLock', 'SingletonSocket', 'SingletonCookie'];
     try {
       if (!fs.existsSync(dir)) return;
       const walk = (d) => {
@@ -310,8 +286,8 @@ class WhatsAppClient extends EventEmitter {
           const full = path.join(d, e.name);
           if (e.isDirectory()) {
             walk(full);
-          } else if (e.isSymbolicLink() || LOCK_NAMES.some(n => n.includes('*') ? e.name.startsWith('.org.chromium') : e.name === n)) {
-            try { fs.unlinkSync(full); console.log(`[WhatsApp:${this.userId}] Removed lock ${e.name}`); } catch (_) {}
+          } else if (e.isSymbolicLink() || LOCK_NAMES.includes(e.name) || e.name.startsWith('.org.chromium')) {
+            try { fs.unlinkSync(full); } catch (_) {}
           }
         }
       };
@@ -323,6 +299,7 @@ class WhatsAppClient extends EventEmitter {
 
   async destroy() {
     this.destroyed = true;
+    this._resolveWaiters();
     try {
       if (this.client) await this.client.destroy();
     } catch (err) {
@@ -332,7 +309,6 @@ class WhatsAppClient extends EventEmitter {
     this.client = null;
   }
 
-  // Delete all session data from disk
   deleteSessionData() {
     const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(this.userId));
     try {
@@ -353,14 +329,18 @@ class WhatsAppManager extends EventEmitter {
     this.clients = new Map();
   }
 
-  async getOrCreateClient(userId) {
-    if (this.clients.has(userId)) {
-      return this.clients.get(userId);
+  // Now waits until QR/ready/disconnected (max 30s). Returns the client.
+  async getOrCreateClient(userId, waitTimeoutMs = 30000) {
+    let client = this.clients.get(userId);
+    if (client) {
+      // Already exists — if not stable, wait a bit
+      if (client.status === 'connecting') {
+        await client.waitUntilStable(waitTimeoutMs);
+      }
+      return client;
     }
 
-    const client = new WhatsAppClient(userId);
-
-    // Forward events with userId
+    client = new WhatsAppClient(userId);
     client.on('qr', (data) => this.emit('qr', data));
     client.on('authenticated', (data) => this.emit('authenticated', data));
     client.on('ready', (data) => this.emit('ready', data));
@@ -371,11 +351,12 @@ class WhatsAppManager extends EventEmitter {
 
     this.clients.set(userId, client);
 
-    // Initialize in background
-    client.initialize().catch((err) =>
-      console.error(`[WhatsAppManager] Failed to init client for user ${userId}:`, err.message)
-    );
+    // Fire and forget initialize, but ALSO wait for status to stabilize
+    client.initialize().catch((err) => {
+      console.error(`[WhatsAppManager] init failed for user ${userId}:`, err.message);
+    });
 
+    await client.waitUntilStable(waitTimeoutMs);
     return client;
   }
 
@@ -396,7 +377,6 @@ class WhatsAppManager extends EventEmitter {
       client.deleteSessionData();
       this.clients.delete(userId);
     } else {
-      // No active client but session data may exist on disk
       const sessionPath = path.join(__dirname, '..', 'data', 'whatsapp-sessions', String(userId));
       if (fs.existsSync(sessionPath)) {
         fs.rmSync(sessionPath, { recursive: true, force: true });
@@ -410,14 +390,11 @@ class WhatsAppManager extends EventEmitter {
     if (client) {
       await client.destroy();
       this.clients.delete(userId);
-      // Wait for Chromium to fully release the profile
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
-    // Re-create without deleting session data (allows auto-reconnect)
     return this.getOrCreateClient(userId);
   }
 
-  // Initialize all existing users' clients on startup
   async initializeAll(userIds) {
     console.log(`[WhatsAppManager] Initializing ${userIds.length} client(s)...`);
     for (const userId of userIds) {
@@ -437,11 +414,15 @@ class WhatsAppManager extends EventEmitter {
     return Array.from(this.clients.values());
   }
 
-  async killIdleClients(maxIdleMs) {
+  // Smart idle-kill: skip clients that have pending messages or recent activity
+  async killIdleClients(maxIdleMs, protectedUserIds = []) {
+    const protectedSet = new Set(protectedUserIds);
     let killed = 0;
     for (const [userId, client] of this.clients) {
+      if (protectedSet.has(userId)) continue;
+      if (client.status === 'connecting') continue; // mid-init, don't kill
       if (client.isIdle(maxIdleMs)) {
-        console.log(`[WhatsAppManager] Killing idle client for user ${userId} (inactive > ${Math.round(maxIdleMs / 60000)}min)`);
+        console.log(`[WhatsAppManager] Killing idle client for user ${userId}`);
         try { await client.destroy(); } catch (_) {}
         this.clients.delete(userId);
         killed++;

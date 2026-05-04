@@ -139,15 +139,11 @@ async function processDueMessages() {
     let waClient = waManager.getClient(message.user_id);
     if (!waClient) {
       console.log(`[Scheduler] Initializing client for user ${message.user_id} on-demand...`);
-      waClient = await waManager.getOrCreateClient(message.user_id);
-      // Wait up to 90s for client to be ready
-      for (let w = 0; w < 30; w++) {
-        if (waClient.getStatus().status === 'ready') break;
-        await sleep(3000);
-      }
+      // getOrCreateClient already waits up to 30s for QR/ready
+      waClient = await waManager.getOrCreateClient(message.user_id, 60000);
     }
     if (waClient.getStatus().status !== 'ready') {
-      console.log(`[Scheduler] Skipping message #${message.id} — user ${message.user_id} client not ready`);
+      console.log(`[Scheduler] Skipping message #${message.id} — user ${message.user_id} client status: ${waClient.getStatus().status}`);
       continue;
     }
 
@@ -246,14 +242,17 @@ async function refreshAllContactsAndGroups() {
   if (refreshed > 0) console.log(`[Scheduler] Refreshed groups/contacts for ${refreshed} client(s)`);
 }
 
-// Kill clients idle for more than IDLE_MAX_MS (default 2h)
-const IDLE_MAX_MS = parseInt(process.env.IDLE_MAX_MS || (2 * 60 * 60 * 1000), 10);
+// Kill clients idle for more than IDLE_MAX_MS (default 24h, configurable via env)
+const IDLE_MAX_MS = parseInt(process.env.IDLE_MAX_MS || (24 * 60 * 60 * 1000), 10);
 
 async function killIdleClientsJob() {
   if (!waManager.killIdleClients) return;
   try {
-    const killed = await waManager.killIdleClients(IDLE_MAX_MS);
-    if (killed > 0) console.log(`[Scheduler] Killed ${killed} idle client(s)`);
+    // Build list of users with pending or recently-sent messages — don't kill them
+    const pending = db.getAllPendingMessages ? db.getAllPendingMessages() : [];
+    const protectedUserIds = [...new Set(pending.map(m => m.user_id))];
+    const killed = await waManager.killIdleClients(IDLE_MAX_MS, protectedUserIds);
+    if (killed > 0) console.log(`[Scheduler] Killed ${killed} idle client(s) (protected: ${protectedUserIds.length})`);
   } catch (err) {
     console.error('[Scheduler] killIdleClients error:', err.message);
   }
