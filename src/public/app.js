@@ -343,7 +343,28 @@ function updateStatusBadge(status) {
 function showQRCode(qrData) {
   const modal = document.getElementById('qr-modal');
   const container = document.getElementById('qr-container');
-  container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(qrData)}" alt="QR Code">`;
+  if (!qrData) return;
+  // Generate QR locally and instantly (no external API delay so it's still valid)
+  container.innerHTML = '<canvas id="qr-canvas"></canvas>';
+  try {
+    if (window.QRCode && QRCode.toCanvas) {
+      QRCode.toCanvas(document.getElementById('qr-canvas'), qrData, {
+        width: 280,
+        margin: 2,
+        errorCorrectionLevel: 'L',
+      }, (err) => {
+        if (err) {
+          console.error('QR render error:', err);
+          // Fallback to external API
+          container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(qrData)}" alt="QR Code">`;
+        }
+      });
+    } else {
+      container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(qrData)}" alt="QR Code">`;
+    }
+  } catch (e) {
+    container.innerHTML = `<img src="https://api.qrserver.com/v1/create-qr-code/?size=280x280&data=${encodeURIComponent(qrData)}" alt="QR Code">`;
+  }
   modal.classList.remove('hidden');
 }
 
