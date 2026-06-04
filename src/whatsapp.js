@@ -82,7 +82,11 @@ class WhatsAppClient extends EventEmitter {
     this.client = new Client({
       authStrategy: new LocalAuth({ clientId: `user-${this.userId}`, dataPath: sessionPath }),
       puppeteer: puppeteerOpts,
-      webVersionCache: { type: 'none' },
+      // Use whatsapp-web.js's known-good WhatsApp Web version (avoids breakage when WA updates their JS)
+      webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1027172658-alpha.html',
+      },
     });
 
     this.client.on('qr', (qr) => {
