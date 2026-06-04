@@ -1,7 +1,4 @@
-34-71-38-196.nip.io {
-  # Don't compress: gzip buffering breaks Server-Sent Events
-  # reverse_proxy with flush_interval = immediate streaming for SSE
-
+35-226-184-23.nip.io {
   reverse_proxy whatsapp-scheduler:3000 {
     flush_interval -1
     transport http {
