@@ -174,11 +174,28 @@ class WhatsAppClient extends EventEmitter {
     const waJsContent = fs.readFileSync(waJsPath, 'utf-8');
     await this.client.pupPage.addScriptTag({ content: waJsContent });
 
-    // Poll for WPP.isReady (wa-js initializes async via webpack hooks)
-    console.log(`[WhatsApp:${this.userId}] Waiting for WPP to initialize...`);
+    // Diagnostic: check what's available immediately after injection
+    const state = await this.client.pupPage.evaluate(() => ({
+      hasWPP: typeof window.WPP !== 'undefined',
+      WPPKeys: window.WPP ? Object.keys(window.WPP).slice(0, 20) : [],
+      hasWebpack: !!(window.WPP && window.WPP.webpack),
+      isReady: !!(window.WPP && window.WPP.isReady),
+      isFullReady: !!(window.WPP && window.WPP.isFullReady),
+    }));
+    console.log(`[WhatsApp:${this.userId}] WPP state after inject:`, JSON.stringify(state));
+
+    // Try multiple ready signals — wa-js exposes them differently across versions
+    console.log(`[WhatsApp:${this.userId}] Waiting for WPP ready (any signal)...`);
     await this.client.pupPage.waitForFunction(
-      () => !!(window.WPP && window.WPP.isReady),
-      { timeout: 90000, polling: 500 }
+      () => {
+        if (!window.WPP) return false;
+        // Any of these means WPP is usable
+        if (window.WPP.isReady === true) return true;
+        if (window.WPP.isFullReady === true) return true;
+        if (window.WPP.whatsapp && window.WPP.whatsapp.functions && window.WPP.whatsapp.functions.queryAllGroups) return true;
+        return false;
+      },
+      { timeout: 120000, polling: 1000 }
     );
 
     this._waJsLoaded = true;
