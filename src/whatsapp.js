@@ -153,47 +153,59 @@ class WhatsAppClient extends EventEmitter {
 
   async _ensureWaJs() {
     if (this._waJsLoaded) return;
-    console.log(`[WhatsApp:${this.userId}] Downloading and injecting wa-js into page...`);
+    console.log(`[WhatsApp:${this.userId}] Loading wa-js into page...`);
 
-    // Download wa-js bundle (cached after first run)
     const waJsPath = path.join(__dirname, '..', 'data', 'wa-js.bundle.js');
-    if (!fs.existsSync(waJsPath)) {
-      const https = require('https');
+
+    // Download if missing or too small (incomplete previous download)
+    const needDownload = !fs.existsSync(waJsPath) || fs.statSync(waJsPath).size < 100000;
+    if (needDownload) {
       const url = 'https://cdn.jsdelivr.net/npm/@wppconnect/wa-js@latest/dist/wppconnect-wa.js';
-      console.log(`[WhatsApp:${this.userId}] Fetching wa-js from ${url}`);
-      await new Promise((resolve, reject) => {
-        const file = fs.createWriteStream(waJsPath);
-        https.get(url, (response) => {
-          if (response.statusCode !== 200) {
-            return reject(new Error(`Failed to download wa-js: HTTP ${response.statusCode}`));
-          }
-          response.pipe(file);
-          file.on('finish', () => file.close(resolve));
-        }).on('error', (err) => {
-          fs.unlink(waJsPath, () => {});
-          reject(err);
-        });
-      });
+      console.log(`[WhatsApp:${this.userId}] Downloading wa-js from ${url}`);
+      await WhatsAppClient._downloadFollowingRedirects(url, waJsPath);
       const stat = fs.statSync(waJsPath);
       console.log(`[WhatsApp:${this.userId}] wa-js downloaded (${stat.size} bytes)`);
+      if (stat.size < 100000) {
+        fs.unlinkSync(waJsPath);
+        throw new Error(`wa-js bundle too small (${stat.size} bytes) — download failed`);
+      }
     }
 
-    // Inject as content (bypasses WA Web's CSP that blocks external scripts)
     const waJsContent = fs.readFileSync(waJsPath, 'utf-8');
     await this.client.pupPage.addScriptTag({ content: waJsContent });
 
-    // Wait for wa-js to be ready
-    await this.client.pupPage.evaluate(() => new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('wa-js init timeout 60s')), 60000);
-      if (window.WPP && window.WPP.webpack && window.WPP.webpack.onReady) {
-        window.WPP.webpack.onReady(() => { clearTimeout(t); resolve(); });
-      } else {
-        clearTimeout(t);
-        reject(new Error('WPP not available after script injection'));
-      }
-    }));
+    // Poll for WPP.isReady (wa-js initializes async via webpack hooks)
+    console.log(`[WhatsApp:${this.userId}] Waiting for WPP to initialize...`);
+    await this.client.pupPage.waitForFunction(
+      () => !!(window.WPP && window.WPP.isReady),
+      { timeout: 90000, polling: 500 }
+    );
+
     this._waJsLoaded = true;
     console.log(`[WhatsApp:${this.userId}] wa-js ready`);
+  }
+
+  static _downloadFollowingRedirects(url, dest, maxRedirects = 5) {
+    const https = require('https');
+    return new Promise((resolve, reject) => {
+      const fetch = (u, redirectsLeft) => {
+        https.get(u, (res) => {
+          if ([301, 302, 303, 307, 308].includes(res.statusCode)) {
+            res.resume();
+            if (redirectsLeft <= 0) return reject(new Error('Too many redirects'));
+            return fetch(res.headers.location, redirectsLeft - 1);
+          }
+          if (res.statusCode !== 200) {
+            return reject(new Error(`HTTP ${res.statusCode}`));
+          }
+          const file = fs.createWriteStream(dest);
+          res.pipe(file);
+          file.on('finish', () => file.close(() => resolve()));
+          file.on('error', reject);
+        }).on('error', reject);
+      };
+      fetch(url, maxRedirects);
+    });
   }
 
   async loadGroups() {
