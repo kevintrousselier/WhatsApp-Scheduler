@@ -159,17 +159,30 @@ class WhatsAppClient extends EventEmitter {
     this.groupsLoading = true;
     try {
       this.touchActivity();
-      console.log(`[WhatsApp:${this.userId}] Loading groups (this can take a while on first connect)...`);
-      const chats = await this.client.getChats();
-      this.groups = chats
-        .filter((chat) => chat.isGroup)
-        .map((chat) => ({
-          id: chat.id._serialized,
-          name: chat.name,
-          participants: chat.groupMetadata?.participants?.length || 0,
-        }));
+      console.log(`[WhatsApp:${this.userId}] Loading groups (light mode via internal Store)...`);
+      // Bypass heavy getChats() — go directly to WA Web internal Store
+      // This avoids pulling full metadata for every chat (which causes timeouts on big accounts)
+      const groups = await this.client.pupPage.evaluate(() => {
+        try {
+          const chats = window.Store && window.Store.Chat && window.Store.Chat.getModelsArray
+            ? window.Store.Chat.getModelsArray()
+            : [];
+          return chats
+            .filter((c) => c && c.id && c.id._serialized && c.id._serialized.endsWith('@g.us'))
+            .map((c) => ({
+              id: c.id._serialized,
+              name: (c.formattedTitle || c.name || c.id._serialized) + '',
+              participants: (c.groupMetadata && c.groupMetadata.participants && c.groupMetadata.participants.length) || 0,
+            }));
+        } catch (e) {
+          return { __error: e.message };
+        }
+      });
+      if (groups && groups.__error) throw new Error('Store access failed: ' + groups.__error);
+      this.groups = Array.isArray(groups) ? groups : [];
+      this.groups.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       this.groupsLoaded = true;
-      console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups`);
+      console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups (light)`);
       this.emit('groups_updated', { userId: this.userId });
     } finally {
       this.groupsLoading = false;
