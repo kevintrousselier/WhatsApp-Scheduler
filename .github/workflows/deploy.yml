@@ -1,0 +1,28 @@
+name: Deploy to GCP
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.GCP_HOST }}
+          username: ${{ secrets.GCP_USER }}
+          key: ${{ secrets.GCP_SSH_KEY }}
+          port: 22
+          timeout: 30s
+          command_timeout: 15m
+          script: |
+            set -e
+            cd ~/WhatsApp-Scheduler
+            git fetch --all
+            git reset --hard origin/main
+            sudo docker compose up -d --build
+            echo "✅ Deploy OK — running containers:"
+            sudo docker compose ps
