@@ -203,7 +203,24 @@ app.post('/api/reconnect', requireUser, async (req, res) => {
 // Groups & Contacts
 app.get('/api/groups', requireUser, (req, res) => {
   const client = waManager.getClient(req.userId);
-  res.json(client ? client.getGroups() : []);
+  if (!client) return res.json({ groups: [], loaded: false, loading: false });
+  res.json({
+    groups: client.getGroups(),
+    loaded: client.groupsLoaded,
+    loading: client.groupsLoading,
+  });
+});
+
+// Trigger groups load explicitly (slow on first connect)
+app.post('/api/groups/load', requireUser, async (req, res) => {
+  const client = waManager.getClient(req.userId);
+  if (!client) return res.status(400).json({ error: 'No WhatsApp client' });
+  if (client.getStatus().status !== 'ready') {
+    return res.status(400).json({ error: 'WhatsApp client not ready' });
+  }
+  if (client.groupsLoading) return res.json({ status: 'loading' });
+  client.loadGroups().catch((err) => console.warn('loadGroups failed:', err.message));
+  res.json({ status: 'started' });
 });
 
 // Lazy contact loading: returns cached. Use POST /api/contacts/load to trigger explicit load.

@@ -12,6 +12,8 @@ class WhatsAppClient extends EventEmitter {
     this.qrCode = null;
     this.groups = [];
     this.contacts = [];
+    this.groupsLoaded = false;
+    this.groupsLoading = false;
     this.contactsLoaded = false;
     this.contactsLoading = false;
     this.destroyed = false;
@@ -82,12 +84,7 @@ class WhatsAppClient extends EventEmitter {
     this.client = new Client({
       authStrategy: new LocalAuth({ clientId: `user-${this.userId}`, dataPath: sessionPath }),
       puppeteer: puppeteerOpts,
-      // Pin to a known stable WhatsApp Web version (from wppconnect-team/wa-version)
-      // This avoids issues when WA pushes JS changes that whatsapp-web.js hasn't adapted to yet
-      webVersionCache: {
-        type: 'remote',
-        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1023040126-alpha.html',
-      },
+      // No webVersionCache pinning — let whatsapp-web.js use its default
     });
 
     this.client.on('qr', (qr) => {
@@ -112,21 +109,9 @@ class WhatsAppClient extends EventEmitter {
       this.emit('ready', { userId: this.userId });
       this._resolveWaiters();
 
-      // CRITICAL: wait for WA Web to finish its initial sync before doing anything
-      // Otherwise getChats/getContacts trigger "Execution context destroyed"
-      console.log(`[WhatsApp:${this.userId}] Waiting 15s for WA Web sync...`);
-      await new Promise(r => setTimeout(r, 15000));
-
-      // Now load groups with retry
-      for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-          await this.loadGroups();
-          break;
-        } catch (e) {
-          console.warn(`[WhatsApp:${this.userId}] loadGroups attempt ${attempt} failed:`, e.message);
-          if (attempt < 3) await new Promise(r => setTimeout(r, 20000));
-        }
-      }
+      // Groups are now loaded ON DEMAND (via /api/groups/load or /api/refresh)
+      // to avoid race with WA Web's initial sync which can take minutes
+      console.log(`[WhatsApp:${this.userId}] Ready — groups/contacts must be loaded explicitly`);
     });
 
     this.client.on('disconnected', (reason) => {
@@ -167,16 +152,28 @@ class WhatsAppClient extends EventEmitter {
   }
 
   async loadGroups() {
-    this.touchActivity();
-    const chats = await this.client.getChats();
-    this.groups = chats
-      .filter((chat) => chat.isGroup)
-      .map((chat) => ({
-        id: chat.id._serialized,
-        name: chat.name,
-        participants: chat.groupMetadata?.participants?.length || 0,
-      }));
-    console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups`);
+    if (this.groupsLoading) {
+      while (this.groupsLoading) await new Promise(r => setTimeout(r, 200));
+      return;
+    }
+    this.groupsLoading = true;
+    try {
+      this.touchActivity();
+      console.log(`[WhatsApp:${this.userId}] Loading groups (this can take a while on first connect)...`);
+      const chats = await this.client.getChats();
+      this.groups = chats
+        .filter((chat) => chat.isGroup)
+        .map((chat) => ({
+          id: chat.id._serialized,
+          name: chat.name,
+          participants: chat.groupMetadata?.participants?.length || 0,
+        }));
+      this.groupsLoaded = true;
+      console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups`);
+      this.emit('groups_updated', { userId: this.userId });
+    } finally {
+      this.groupsLoading = false;
+    }
   }
 
   // Lazy contact load — called only on demand
@@ -219,7 +216,16 @@ class WhatsAppClient extends EventEmitter {
 
   getGroups() { return this.groups; }
   getContacts() { return this.contacts; }
-  getStatus() { return { status: this.status, qrCode: this.qrCode, contactsLoaded: this.contactsLoaded }; }
+  getStatus() {
+    return {
+      status: this.status,
+      qrCode: this.qrCode,
+      groupsLoaded: this.groupsLoaded,
+      groupsLoading: this.groupsLoading,
+      contactsLoaded: this.contactsLoaded,
+      contactsLoading: this.contactsLoading,
+    };
+  }
 
   async getGroupParticipants(groupId) {
     if (this.status !== 'ready') throw new Error('WhatsApp client is not ready');

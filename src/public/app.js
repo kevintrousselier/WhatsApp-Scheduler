@@ -406,12 +406,41 @@ function showLoading(elementId, message = 'Chargement...') {
 
 // --- Groups ---
 async function loadGroups() {
-  showLoading('groups-list', 'Chargement des groupes...');
   try {
     const res = await api('/api/groups');
-    groups = await res.json();
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      groups = data;
+    } else {
+      groups = data.groups || [];
+      if (!data.loaded && !data.loading) {
+        // Show "click to load" prompt
+        const list = document.getElementById('groups-list');
+        if (list) {
+          list.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-light);font-size:13px"><button class="btn btn-sm btn-primary" onclick="triggerLoadGroups()">Charger les groupes</button><br><span style="font-size:11px;margin-top:6px;display:inline-block">Le chargement peut prendre 1-3 minutes (synchro WhatsApp)</span></div>';
+          return;
+        }
+      } else if (data.loading) {
+        showLoading('groups-list', 'Chargement des groupes en cours... (1-3 min)');
+        setTimeout(() => loadGroups(), 5000);
+        return;
+      }
+    }
     renderGroups();
   } catch (err) { console.error('Failed to load groups:', err); }
+}
+
+async function triggerLoadGroups() {
+  try {
+    const res = await api('/api/groups/load', { method: 'POST' });
+    if (res.ok) {
+      showLoading('groups-list', 'Chargement des groupes en cours... (1-3 min)');
+      setTimeout(() => loadGroups(), 5000);
+    } else {
+      const d = await res.json();
+      toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 function renderGroups(filter = '') {
