@@ -153,18 +153,43 @@ class WhatsAppClient extends EventEmitter {
 
   async _ensureWaJs() {
     if (this._waJsLoaded) return;
-    console.log(`[WhatsApp:${this.userId}] Injecting wa-js into page...`);
-    await this.client.pupPage.addScriptTag({
-      url: 'https://cdn.jsdelivr.net/npm/@wppconnect/wa-js@latest/dist/wppconnect-wa.js',
-    });
-    // Wait for wa-js to be ready (it hooks into WA Web internals)
+    console.log(`[WhatsApp:${this.userId}] Downloading and injecting wa-js into page...`);
+
+    // Download wa-js bundle (cached after first run)
+    const waJsPath = path.join(__dirname, '..', 'data', 'wa-js.bundle.js');
+    if (!fs.existsSync(waJsPath)) {
+      const https = require('https');
+      const url = 'https://cdn.jsdelivr.net/npm/@wppconnect/wa-js@latest/dist/wppconnect-wa.js';
+      console.log(`[WhatsApp:${this.userId}] Fetching wa-js from ${url}`);
+      await new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(waJsPath);
+        https.get(url, (response) => {
+          if (response.statusCode !== 200) {
+            return reject(new Error(`Failed to download wa-js: HTTP ${response.statusCode}`));
+          }
+          response.pipe(file);
+          file.on('finish', () => file.close(resolve));
+        }).on('error', (err) => {
+          fs.unlink(waJsPath, () => {});
+          reject(err);
+        });
+      });
+      const stat = fs.statSync(waJsPath);
+      console.log(`[WhatsApp:${this.userId}] wa-js downloaded (${stat.size} bytes)`);
+    }
+
+    // Inject as content (bypasses WA Web's CSP that blocks external scripts)
+    const waJsContent = fs.readFileSync(waJsPath, 'utf-8');
+    await this.client.pupPage.addScriptTag({ content: waJsContent });
+
+    // Wait for wa-js to be ready
     await this.client.pupPage.evaluate(() => new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('wa-js init timeout 60s')), 60000);
       if (window.WPP && window.WPP.webpack && window.WPP.webpack.onReady) {
         window.WPP.webpack.onReady(() => { clearTimeout(t); resolve(); });
       } else {
         clearTimeout(t);
-        reject(new Error('WPP not available after script tag'));
+        reject(new Error('WPP not available after script injection'));
       }
     }));
     this._waJsLoaded = true;
