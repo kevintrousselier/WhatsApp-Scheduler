@@ -454,21 +454,42 @@ function renderSelectedGroups() {
 
 // --- Contacts ---
 async function loadContacts() {
-  showLoading('contacts-list', 'Chargement des contacts...');
   try {
     const res = await api('/api/contacts');
     const data = await res.json();
-    // Backend now returns { contacts, loaded, loading } or [] (legacy)
     if (Array.isArray(data)) {
       contacts = data;
     } else {
       contacts = data.contacts || [];
-      if (!data.loaded && data.loading) {
-        showLoading('contacts-list', 'Chargement des contacts en arriere-plan... (peut prendre 1-2 min)');
+      if (!data.loaded && !data.loading) {
+        // Show a "click to load" prompt
+        const list = document.getElementById('contacts-list');
+        if (list) {
+          list.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-light);font-size:13px"><button class="btn btn-sm btn-primary" onclick="triggerLoadContacts()">Charger les contacts</button><br><span style="font-size:11px;margin-top:6px;display:inline-block">Le chargement peut prendre 1-2 minutes</span></div>';
+          return;
+        }
+      } else if (data.loading) {
+        showLoading('contacts-list', 'Chargement des contacts en cours... (1-2 min)');
+        // Poll every 5s until loaded
+        setTimeout(() => loadContacts(), 5000);
+        return;
       }
     }
     renderContacts();
   } catch (err) { console.error('Failed to load contacts:', err); }
+}
+
+async function triggerLoadContacts() {
+  try {
+    const res = await api('/api/contacts/load', { method: 'POST' });
+    if (res.ok) {
+      showLoading('contacts-list', 'Chargement des contacts en cours... (1-2 min)');
+      setTimeout(() => loadContacts(), 5000);
+    } else {
+      const d = await res.json();
+      toast(d.error || 'Erreur', 'error');
+    }
+  } catch (err) { toast('Erreur: ' + err.message, 'error'); }
 }
 
 async function manualRefreshContacts() {

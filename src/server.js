@@ -206,21 +206,32 @@ app.get('/api/groups', requireUser, (req, res) => {
   res.json(client ? client.getGroups() : []);
 });
 
-// Lazy contact loading: triggers actual load on first call, cached afterwards
+// Lazy contact loading: returns cached. Use POST /api/contacts/load to trigger explicit load.
 app.get('/api/contacts', requireUser, async (req, res) => {
   const client = waManager.getClient(req.userId);
-  if (!client) return res.json([]);
-  if (client.getStatus().status !== 'ready') return res.json([]);
-  // Trigger load if not already loaded
-  if (!client.contactsLoaded && !client.contactsLoading) {
-    // Fire and forget — UI will poll or use SSE 'contacts_updated' event
-    client.loadContacts().catch((err) => console.warn('Lazy loadContacts failed:', err.message));
-  }
+  if (!client) return res.json({ contacts: [], loaded: false, loading: false });
   res.json({
     contacts: client.getContacts(),
     loaded: client.contactsLoaded,
     loading: client.contactsLoading,
   });
+});
+
+// Explicit trigger for loading contacts (slow operation)
+app.post('/api/contacts/load', requireUser, async (req, res) => {
+  const client = waManager.getClient(req.userId);
+  if (!client) return res.status(400).json({ error: 'No WhatsApp client' });
+  if (client.getStatus().status !== 'ready') {
+    return res.status(400).json({ error: 'WhatsApp client not ready' });
+  }
+  if (client.contactsLoading) {
+    return res.json({ status: 'loading' });
+  }
+  // Fire and forget
+  client.loadContacts(req.body && req.body.force === true).catch((err) =>
+    console.warn('loadContacts failed:', err.message)
+  );
+  res.json({ status: 'started' });
 });
 
 // Group participants (for @mentions)

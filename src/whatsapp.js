@@ -62,8 +62,8 @@ class WhatsAppClient extends EventEmitter {
 
     const puppeteerOpts = {
       headless: true,
-      protocolTimeout: 360000,
-      timeout: 180000,
+      protocolTimeout: 600000,
+      timeout: 240000,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -82,7 +82,12 @@ class WhatsAppClient extends EventEmitter {
     this.client = new Client({
       authStrategy: new LocalAuth({ clientId: `user-${this.userId}`, dataPath: sessionPath }),
       puppeteer: puppeteerOpts,
-      // Use whatsapp-web.js default (no pinning) — lets the lib pick the right WA Web version
+      // Pin to a known stable WhatsApp Web version (from wppconnect-team/wa-version)
+      // This avoids issues when WA pushes JS changes that whatsapp-web.js hasn't adapted to yet
+      webVersionCache: {
+        type: 'remote',
+        remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1023040126-alpha.html',
+      },
     });
 
     this.client.on('qr', (qr) => {
@@ -104,14 +109,24 @@ class WhatsAppClient extends EventEmitter {
       this.status = 'ready';
       this.qrCode = null;
       console.log(`[WhatsApp:${this.userId}] Client ready`);
-      // Load groups (fast). Contacts are LAZY (loaded on demand).
-      try {
-        await this.loadGroups();
-      } catch (e) {
-        console.warn(`[WhatsApp:${this.userId}] loadGroups error (non-blocking):`, e.message);
-      }
       this.emit('ready', { userId: this.userId });
       this._resolveWaiters();
+
+      // CRITICAL: wait for WA Web to finish its initial sync before doing anything
+      // Otherwise getChats/getContacts trigger "Execution context destroyed"
+      console.log(`[WhatsApp:${this.userId}] Waiting 15s for WA Web sync...`);
+      await new Promise(r => setTimeout(r, 15000));
+
+      // Now load groups with retry
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await this.loadGroups();
+          break;
+        } catch (e) {
+          console.warn(`[WhatsApp:${this.userId}] loadGroups attempt ${attempt} failed:`, e.message);
+          if (attempt < 3) await new Promise(r => setTimeout(r, 20000));
+        }
+      }
     });
 
     this.client.on('disconnected', (reason) => {
