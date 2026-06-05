@@ -151,6 +151,26 @@ class WhatsAppClient extends EventEmitter {
     });
   }
 
+  async _ensureWaJs() {
+    if (this._waJsLoaded) return;
+    console.log(`[WhatsApp:${this.userId}] Injecting wa-js into page...`);
+    await this.client.pupPage.addScriptTag({
+      url: 'https://cdn.jsdelivr.net/npm/@wppconnect/wa-js@latest/dist/wppconnect-wa.js',
+    });
+    // Wait for wa-js to be ready (it hooks into WA Web internals)
+    await this.client.pupPage.evaluate(() => new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('wa-js init timeout 60s')), 60000);
+      if (window.WPP && window.WPP.webpack && window.WPP.webpack.onReady) {
+        window.WPP.webpack.onReady(() => { clearTimeout(t); resolve(); });
+      } else {
+        clearTimeout(t);
+        reject(new Error('WPP not available after script tag'));
+      }
+    }));
+    this._waJsLoaded = true;
+    console.log(`[WhatsApp:${this.userId}] wa-js ready`);
+  }
+
   async loadGroups() {
     if (this.groupsLoading) {
       while (this.groupsLoading) await new Promise(r => setTimeout(r, 200));
@@ -159,30 +179,30 @@ class WhatsAppClient extends EventEmitter {
     this.groupsLoading = true;
     try {
       this.touchActivity();
-      console.log(`[WhatsApp:${this.userId}] Loading groups (light mode via internal Store)...`);
-      // Bypass heavy getChats() — go directly to WA Web internal Store
-      // This avoids pulling full metadata for every chat (which causes timeouts on big accounts)
-      const groups = await this.client.pupPage.evaluate(() => {
+      console.log(`[WhatsApp:${this.userId}] Loading groups via wa-js queryAllGroups...`);
+      await this._ensureWaJs();
+
+      const groups = await this.client.pupPage.evaluate(async () => {
         try {
-          const chats = window.Store && window.Store.Chat && window.Store.Chat.getModelsArray
-            ? window.Store.Chat.getModelsArray()
-            : [];
-          return chats
-            .filter((c) => c && c.id && c.id._serialized && c.id._serialized.endsWith('@g.us'))
-            .map((c) => ({
-              id: c.id._serialized,
-              name: (c.formattedTitle || c.name || c.id._serialized) + '',
-              participants: (c.groupMetadata && c.groupMetadata.participants && c.groupMetadata.participants.length) || 0,
-            }));
+          // wa-js queryAllGroups: real network call to WA server, returns all groups
+          // (not limited by the sidebar's lazy-load like Store.Chat is)
+          const result = await window.WPP.whatsapp.functions.queryAllGroups();
+          return (result || []).map((g) => {
+            const id = (g.id && (g.id._serialized || g.id.toString())) || '';
+            const name = (g.subject || g.name || id) + '';
+            const participants = (g.participants && g.participants.length) || 0;
+            return { id, name, participants };
+          });
         } catch (e) {
-          return { __error: e.message };
+          return { __error: e.message || String(e) };
         }
       });
-      if (groups && groups.__error) throw new Error('Store access failed: ' + groups.__error);
+
+      if (groups && groups.__error) throw new Error('queryAllGroups failed: ' + groups.__error);
       this.groups = Array.isArray(groups) ? groups : [];
       this.groups.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       this.groupsLoaded = true;
-      console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups (light)`);
+      console.log(`[WhatsApp:${this.userId}] Loaded ${this.groups.length} groups (wa-js)`);
       this.emit('groups_updated', { userId: this.userId });
     } finally {
       this.groupsLoading = false;
